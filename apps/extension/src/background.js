@@ -131,13 +131,18 @@ chrome.runtime.onStartup?.addListener?.(() => {
 void boot();
 
 /** Best-effort wipe when Chrome disables/unloads this extension (tab open OR closed). */
-chrome.runtime.onSuspend.addListener(() => {
-  // Sync path first — no await/storage (SW dies mid-async otherwise → Grammarly leak)
-  fireDisableWipeSync();
-  void markDisablePending();
-  void wipeDurableLaunchCookies();
-  void runDisableCleanup();
-});
+// MV3 service workers: onSuspend is NOT available (throws if called → SW never boots).
+try {
+  chrome.runtime.onSuspend?.addListener?.(() => {
+    // Sync path first — no await/storage (SW dies mid-async otherwise → Grammarly leak)
+    fireDisableWipeSync();
+    void markDisablePending();
+    void wipeDurableLaunchCookies();
+    void runDisableCleanup();
+  });
+} catch {
+  /* MV3 SW */
+}
 
 try {
   globalThis.addEventListener?.('unload', () => {

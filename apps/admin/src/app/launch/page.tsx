@@ -2,10 +2,8 @@
 
 import { Suspense, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import Link from 'next/link';
-import { AlertCircleIcon, CheckIcon, LoaderCircleIcon, RefreshCwIcon } from 'lucide-react';
+import { AlertCircleIcon, CheckIcon, LoaderCircleIcon } from 'lucide-react';
 
-import { Button } from '@/components/ui/button';
 import { API_BASE } from '@/lib/api';
 
 type Phase = 'sending' | 'ok' | 'error';
@@ -304,20 +302,6 @@ function LaunchInner() {
             <p className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm leading-relaxed text-red-800">
               {errorText}
             </p>
-          ) : null}
-
-          {phase === 'error' ? (
-            <div className="mt-6 flex justify-center gap-2">
-              <Button variant="outline" size="sm" nativeButton={false} render={<Link href="/access" />}>
-                Back
-              </Button>
-              {token ? (
-                <Button size="sm" onClick={() => window.location.reload()}>
-                  <RefreshCwIcon data-icon="inline-start" />
-                  Try again
-                </Button>
-              ) : null}
-            </div>
           ) : null}
         </div>
 
