@@ -275,15 +275,21 @@ export async function packResellerExtension(input: {
     ? [`https://${memberHost}/*`, `https://*.${memberHost}/*`]
     : [];
 
-  // Admin /launch handoff — always include ADMIN_ORIGIN so token-only bridge works in prod.
+  // Admin /launch handoff — ADMIN_ORIGIN + CORS origins (prod panel URL).
   // Slug guard (client from peek) keeps other reseller packs from consuming the token.
   const bridgeMatches: string[] = [];
+  const pushBridge = (raw: string) => {
+    const pat = originPattern(raw);
+    if (pat && !bridgeMatches.includes(pat)) bridgeMatches.push(pat);
+  };
+  pushBridge(env.adminOrigin);
+  for (const o of env.corsOrigins) pushBridge(o);
+  for (const o of env.extensionConnectableOrigins) pushBridge(o);
   try {
     const admin = new URL(env.adminOrigin);
-    bridgeMatches.push(`${admin.protocol}//${admin.host}/*`);
     if (admin.hostname === '127.0.0.1' || admin.hostname === 'localhost') {
       const altHost = admin.hostname === '127.0.0.1' ? 'localhost' : '127.0.0.1';
-      bridgeMatches.push(`${admin.protocol}//${altHost}:${admin.port || '3000'}/*`);
+      pushBridge(`${admin.protocol}//${altHost}:${admin.port || '3000'}`);
     }
   } catch {
     /* */

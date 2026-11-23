@@ -168,7 +168,23 @@ function LaunchInner() {
       setErrorText(friendlyError(msg));
     }
 
-    window.addEventListener('1clk-launch-result', onResult);
+    function onMessage(ev: MessageEvent) {
+      const data = ev.data;
+      if (!data || data.source !== 'oneclk-extension' || data.type !== '1clk-launch-result') return;
+      onResult(
+        new CustomEvent('1clk-launch-result', {
+          detail: {
+            requestId: data.requestId,
+            res: data.res,
+            lastError: data.lastError,
+          },
+        }),
+      );
+    }
+
+    // document = shared with content script (window CustomEvent is isolated-world blind)
+    document.addEventListener('1clk-launch-result', onResult);
+    window.addEventListener('message', onMessage);
 
     void (async () => {
       const cached = readLaunchMeta(token);
@@ -203,21 +219,27 @@ function LaunchInner() {
       setPhase('sending');
       setErrorText('');
 
-      // Single handoff — extension SW has its own in-flight lock for late retries
-      window.dispatchEvent(new CustomEvent('1clk-launch', { detail }));
-      // One delayed retry only if still waiting (SW wake / content script attach)
+      function fireLaunch() {
+        document.dispatchEvent(new CustomEvent('1clk-launch', { detail }));
+        window.postMessage({ source: 'oneclk-page', type: '1clk-launch', ...detail }, '*');
+      }
+
+      fireLaunch();
       timeoutId = setTimeout(() => {
         if (cancelled || settledRef.current) return;
-        window.dispatchEvent(new CustomEvent('1clk-launch', { detail }));
+        fireLaunch();
       }, 1200);
 
       setTimeout(() => {
         if (cancelled || settledRef.current) return;
         settledRef.current = true;
+        const hasIndicator = !!document.querySelector('[id^="oneclk-v2-"]');
         setPhase('error');
         setErrorText(
           friendlyError(
-            'Load the matching reseller unpacked extension, enable it, then click Retry. Wrong pack / inactive service worker will block handoff.',
+            hasIndicator
+              ? 'Extension is installed but did not respond. Open chrome://extensions, click Reload on ToolsMandi, then Try again.'
+              : 'Extension not detected. Download the toolsmandi ZIP again, unzip it, Load unpacked in Chrome, enable it, then try once more.',
           ),
         );
       }, 8000);
@@ -226,7 +248,8 @@ function LaunchInner() {
     return () => {
       cancelled = true;
       if (timeoutId) clearTimeout(timeoutId);
-      window.removeEventListener('1clk-launch-result', onResult);
+      document.removeEventListener('1clk-launch-result', onResult);
+      window.removeEventListener('message', onMessage);
     };
   }, [token]);
 

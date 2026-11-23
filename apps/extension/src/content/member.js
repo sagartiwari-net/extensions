@@ -10,21 +10,32 @@ import { CLIENT_CONFIG } from '../config.gen.js';
   }
 })();
 
-window.addEventListener('1clk-launch', (ev) => {
-  const { token, client, requestId } = ev.detail || {};
+function handleLaunchDetail(detail) {
+  const { token, client, requestId } = detail || {};
   if (!token) return;
-  // Fail closed: client must be present and match this pack (prevents wrong pack burning token)
+  // Fail closed: client must match this pack
   if (!client || client !== CLIENT_CONFIG.SLUG) return;
 
   chrome.runtime.sendMessage({ type: 'LAUNCH', token, client: CLIENT_CONFIG.SLUG, requestId }, (res) => {
-    window.dispatchEvent(
-      new CustomEvent('1clk-launch-result', {
-        detail: {
-          requestId,
-          res,
-          lastError: chrome.runtime.lastError?.message || null,
-        },
-      }),
-    );
+    const payload = {
+      requestId,
+      res,
+      lastError: chrome.runtime.lastError?.message || null,
+    };
+    // Shared DOM target — page JS and content script both see these
+    document.dispatchEvent(new CustomEvent('1clk-launch-result', { detail: payload }));
+    window.postMessage({ source: 'oneclk-extension', type: '1clk-launch-result', ...payload }, '*');
   });
+}
+
+// Preferred: document CustomEvent (shared DOM EventTarget across isolated worlds)
+document.addEventListener('1clk-launch', (ev) => {
+  handleLaunchDetail(ev.detail);
+});
+
+// Fallback: postMessage from page
+window.addEventListener('message', (ev) => {
+  const data = ev.data;
+  if (!data || data.source !== 'oneclk-page' || data.type !== '1clk-launch') return;
+  handleLaunchDetail(data);
 });
