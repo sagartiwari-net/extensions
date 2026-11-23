@@ -172,7 +172,7 @@ function LaunchInner() {
           } catch {
             /* non-script tabs cannot close themselves */
           }
-        }, 1200);
+        }, 350);
         return;
       }
       // Ignore "already used" after a success race; otherwise show error once
@@ -208,6 +208,23 @@ function LaunchInner() {
         setDisplaySiteName(cached.host || cached.site || cached.client || 'your');
       }
 
+      function fireLaunch(client: string) {
+        const detail = { token, client, requestId };
+        document.dispatchEvent(new CustomEvent('1clk-launch', { detail }));
+        window.postMessage({ source: 'oneclk-page', type: '1clk-launch', ...detail }, '*');
+      }
+
+      // Fast path: cached client from Access hub — don't wait on peek round-trip
+      if (cached.client) {
+        setPhase('sending');
+        setErrorText('');
+        fireLaunch(cached.client);
+        timeoutId = setTimeout(() => {
+          if (cancelled || settledRef.current) return;
+          fireLaunch(cached.client!);
+        }, 900);
+      }
+
       const peeked = await fetchTokenMeta(token);
       if (cancelled) return;
 
@@ -218,32 +235,28 @@ function LaunchInner() {
       setDisplayUser(user || 'there');
       setDisplaySiteName(site || 'your');
 
-      // Fail closed without client — wrong pack must not receive the event
       if (!client) {
-        settledRef.current = true;
-        setPhase('error');
-        setErrorText(
-          friendlyError(
-            'Could not verify which site this access belongs to. Open the tool again from your member account.',
-          ),
-        );
+        if (!settledRef.current) {
+          settledRef.current = true;
+          setPhase('error');
+          setErrorText(
+            friendlyError(
+              'Could not verify which site this access belongs to. Open the tool again from your member account.',
+            ),
+          );
+        }
         return;
       }
 
-      const detail = { token, client, requestId };
-      setPhase('sending');
-      setErrorText('');
-
-      function fireLaunch() {
-        document.dispatchEvent(new CustomEvent('1clk-launch', { detail }));
-        window.postMessage({ source: 'oneclk-page', type: '1clk-launch', ...detail }, '*');
+      if (!cached.client) {
+        setPhase('sending');
+        setErrorText('');
+        fireLaunch(client);
+        timeoutId = setTimeout(() => {
+          if (cancelled || settledRef.current) return;
+          fireLaunch(client);
+        }, 900);
       }
-
-      fireLaunch();
-      timeoutId = setTimeout(() => {
-        if (cancelled || settledRef.current) return;
-        fireLaunch();
-      }, 1200);
 
       setTimeout(() => {
         if (cancelled || settledRef.current) return;
@@ -253,7 +266,7 @@ function LaunchInner() {
         setErrorText(
           friendlyError(
             hasIndicator
-              ? 'Extension is installed but did not respond. Open chrome://extensions, click Reload on ToolsMandi, then Try again.'
+              ? 'Extension is installed but did not respond. Open chrome://extensions, click Reload on ToolsMandi, then try again.'
               : 'Extension not detected. Download the toolsmandi ZIP again, unzip it, Load unpacked in Chrome, enable it, then try once more.',
           ),
         );

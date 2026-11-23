@@ -7,26 +7,34 @@ import { loadLaunchRules } from './launch-rules.js';
 import { parseBrandSettings } from './lib/extension-packager.js';
 
 /** Flatten DigitaVision / old vault shapes: storage.localStorage → localStorage */
-export function normalizeSession(raw: Record<string, unknown>): Record<string, unknown> {
+export function normalizeSession(raw: unknown): Record<string, unknown> {
+  // Cookie-Editor export is often a bare array of cookie objects
+  if (Array.isArray(raw)) {
+    return { cookies: raw, localStorage: {}, sessionStorage: {} };
+  }
+  if (!raw || typeof raw !== 'object') {
+    return { cookies: [], localStorage: {}, sessionStorage: {} };
+  }
+  const obj = raw as Record<string, unknown>;
   const nested =
-    raw.storage && typeof raw.storage === 'object'
-      ? (raw.storage as Record<string, unknown>)
+    obj.storage && typeof obj.storage === 'object'
+      ? (obj.storage as Record<string, unknown>)
       : {};
   const localStorage =
-    (raw.localStorage as Record<string, unknown> | null) ||
-    (raw.LocalStorage as Record<string, unknown> | null) ||
+    (obj.localStorage as Record<string, unknown> | null) ||
+    (obj.LocalStorage as Record<string, unknown> | null) ||
     (nested.localStorage as Record<string, unknown> | null) ||
     (nested.LocalStorage as Record<string, unknown> | null) ||
     {};
   const sessionStorage =
-    (raw.sessionStorage as Record<string, unknown> | null) ||
-    (raw.SessionStorage as Record<string, unknown> | null) ||
+    (obj.sessionStorage as Record<string, unknown> | null) ||
+    (obj.SessionStorage as Record<string, unknown> | null) ||
     (nested.sessionStorage as Record<string, unknown> | null) ||
     (nested.SessionStorage as Record<string, unknown> | null) ||
     {};
-  const cookies = (raw.cookies || raw.Cookies || []) as unknown[];
+  const cookies = (obj.cookies || obj.Cookies || []) as unknown[];
   return {
-    ...raw,
+    ...obj,
     cookies: Array.isArray(cookies) ? cookies : [],
     localStorage: localStorage && typeof localStorage === 'object' ? localStorage : {},
     sessionStorage: sessionStorage && typeof sessionStorage === 'object' ? sessionStorage : {},
@@ -218,7 +226,7 @@ export async function consumeSessionToken(token: string) {
   let session: Record<string, unknown>;
   try {
     const plain = decryptCookieData(cipher, password);
-    session = normalizeSession(JSON.parse(plain) as Record<string, unknown>);
+    session = normalizeSession(JSON.parse(plain) as unknown);
   } catch {
     const err = new Error('Cookie decrypt failed') as Error & { statusCode: number };
     err.statusCode = 500;
@@ -234,9 +242,9 @@ export async function consumeSessionToken(token: string) {
     (ls && typeof ls === 'object' && Object.keys(ls as object).length > 0) ||
     (ss && typeof ss === 'object' && Object.keys(ss as object).length > 0);
   if (!usable) {
-    const err = new Error('Session has no cookies/storage — check tool vault') as Error & {
-      statusCode: number;
-    };
+    const err = new Error(
+      'Session has no cookies/storage — check tool vault (paste Cookie-Editor JSON or {"cookies":[...]})',
+    ) as Error & { statusCode: number };
     err.statusCode = 400;
     throw err;
   }

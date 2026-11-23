@@ -350,7 +350,8 @@ export default function ToolDetailPage() {
             <CardHeader>
               <CardTitle>Cookie vault</CardTitle>
               <CardDescription>
-                Paste plain JSON. Server encrypts with AES (CryptoJS-compatible).
+                Paste Cookie-Editor JSON — either {'{"cookies":[...]}'} or a bare cookie array{' '}
+                {'[{...}]'}. Server normalizes and encrypts.
               </CardDescription>
             </CardHeader>
             <CardContent>

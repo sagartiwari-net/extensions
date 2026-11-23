@@ -376,26 +376,9 @@ async function processLaunch(token, askedClient) {
   }
 
   const tab = await chrome.tabs.create({ url: webUrl, active: true });
-  await waitForTabComplete(tab.id, 45000).catch(() => {});
-
-  if (transport.writeJar) {
-    await syncJarCookiesForUrl(session, webUrl, webUrl, leaseSeconds).catch(() => {});
-  }
-
   const cookieNames = cookieList.map((c) => c.name).filter(Boolean);
 
-  // extension_only: re-wipe jar after first paint — catches Set-Cookie races before strip.
-  if (!transport.writeJar && tab.id) {
-    try {
-      const launchApex = apexFromHost(new URL(webUrl).hostname);
-      for (const a of relatedApexes(launchApex)) {
-        await clearCookiesForApexDomain(a).catch(() => {});
-      }
-    } catch {
-      /* */
-    }
-  }
-
+  // Mark active launch immediately so kill-switch / watchdog can attach without waiting for load.
   if (tab.id) {
     await saveLaunchCleanup(tab.id, webUrl, cookieList).catch(() => {});
     await chrome.storage.session.set({
@@ -409,90 +392,120 @@ async function processLaunch(token, askedClient) {
         at: Date.now(),
       },
     });
-    await injectPageWatchdog(tab.id, webUrl, cookieNames);
   }
 
-  if (strategy === 'storage_reload' && tab.id) {
-    await chrome.scripting
-      .executeScript({
-        target: { tabId: tab.id },
-        world: 'MAIN',
-        func: (sess, launchUrl) => {
-          const nested = sess.storage || {};
-          const ls =
-            sess.localStorage || sess.LocalStorage || nested.localStorage || nested.LocalStorage || {};
-          const ss =
-            sess.sessionStorage ||
-            sess.SessionStorage ||
-            nested.sessionStorage ||
-            nested.SessionStorage ||
-            {};
-          try {
-            localStorage.clear();
-          } catch {}
-          try {
-            sessionStorage.clear();
-          } catch {}
-          for (const [k, v] of Object.entries(ls || {})) {
-            try {
-              localStorage.setItem(k, typeof v === 'string' ? v : JSON.stringify(v));
-            } catch {}
-          }
-          for (const [k, v] of Object.entries(ss || {})) {
-            try {
-              sessionStorage.setItem(k, typeof v === 'string' ? v : JSON.stringify(v));
-            } catch {}
-          }
-          try {
-            sessionStorage.setItem('__1clk_launch_tab', '1');
-            sessionStorage.setItem('__1clk_was_launch', '1');
-            sessionStorage.setItem('__1clk_launch_url', launchUrl);
-          } catch {}
-        },
-        args: [session, webUrl],
-      })
-      .catch(() => {});
+  // Member bridge must not wait for tool page load (was 5–7s). Finish inject async.
+  void (async () => {
     try {
-      await chrome.tabs.reload(tab.id, { bypassCache: true });
       await waitForTabComplete(tab.id, 45000).catch(() => {});
-    } catch {
-      /* */
-    }
-    if (transport.writeJar) {
-      await syncJarCookiesForUrl(session, webUrl, webUrl, leaseSeconds).catch(() => {});
-    }
-    await injectPageWatchdog(tab.id, webUrl, cookieNames);
-  }
 
-  let cssCount = 0;
-  if (tab.id) {
-    // Use live tab URL so group patterns like "semrush.com" match www.semrush.com
-    const pageUrl = (await chrome.tabs.get(tab.id).catch(() => null))?.url || webUrl;
-    cssCount = await applyCssRules(tab.id, pageUrl, rules);
-    // Re-inject a few times while DOM settles (SPA / late hero mount)
-    for (const ms of [400, 1200, 3000]) {
-      setTimeout(() => {
-        void chrome.tabs
-          .get(tab.id)
-          .then((t) => applyCssRules(tab.id, t?.url || webUrl, rules))
+      if (transport.writeJar) {
+        await syncJarCookiesForUrl(session, webUrl, webUrl, leaseSeconds).catch(() => {});
+      }
+
+      // extension_only: re-wipe jar after first paint — catches Set-Cookie races before strip.
+      if (!transport.writeJar && tab.id) {
+        try {
+          const launchApex = apexFromHost(new URL(webUrl).hostname);
+          for (const a of relatedApexes(launchApex)) {
+            await clearCookiesForApexDomain(a).catch(() => {});
+          }
+        } catch {
+          /* */
+        }
+      }
+
+      if (tab.id) {
+        await injectPageWatchdog(tab.id, webUrl, cookieNames);
+      }
+
+      if (strategy === 'storage_reload' && tab.id) {
+        await chrome.scripting
+          .executeScript({
+            target: { tabId: tab.id },
+            world: 'MAIN',
+            func: (sess, launchUrl) => {
+              const nested = sess.storage || {};
+              const ls =
+                sess.localStorage ||
+                sess.LocalStorage ||
+                nested.localStorage ||
+                nested.LocalStorage ||
+                {};
+              const ss =
+                sess.sessionStorage ||
+                sess.SessionStorage ||
+                nested.sessionStorage ||
+                nested.SessionStorage ||
+                {};
+              try {
+                localStorage.clear();
+              } catch {}
+              try {
+                sessionStorage.clear();
+              } catch {}
+              for (const [k, v] of Object.entries(ls || {})) {
+                try {
+                  localStorage.setItem(k, typeof v === 'string' ? v : JSON.stringify(v));
+                } catch {}
+              }
+              for (const [k, v] of Object.entries(ss || {})) {
+                try {
+                  sessionStorage.setItem(k, typeof v === 'string' ? v : JSON.stringify(v));
+                } catch {}
+              }
+              try {
+                sessionStorage.setItem('__1clk_launch_tab', '1');
+                sessionStorage.setItem('__1clk_was_launch', '1');
+                sessionStorage.setItem('__1clk_launch_url', launchUrl);
+              } catch {}
+            },
+            args: [session, webUrl],
+          })
           .catch(() => {});
-      }, ms);
-    }
-  }
+        try {
+          await chrome.tabs.reload(tab.id, { bypassCache: true });
+          await waitForTabComplete(tab.id, 45000).catch(() => {});
+        } catch {
+          /* */
+        }
+        if (transport.writeJar) {
+          await syncJarCookiesForUrl(session, webUrl, webUrl, leaseSeconds).catch(() => {});
+        }
+        await injectPageWatchdog(tab.id, webUrl, cookieNames);
+      }
 
-  const warnNote = integrityAction === 'warn' ? ';integrity=warn' : '';
-  await reportLaunch({
-    reseller_id: data.reseller_id,
-    tool_id: data.tool_id,
-    success: true,
-    reason: `mode=${transport.mode};jar=${seeded.set}/${seeded.attempted};dnrHosts=${dnrHosts || seeded.hosts.length};strip=${strip ? 1 : 0};lease=${leaseSeconds};rules=${dnrCount};css=${cssCount}${warnNote}`,
-    inject_strategy: strategy,
-    duration_ms: Date.now() - started,
-    extension_id: chrome.runtime.id,
-    username: data.username || null,
-    client_ip: data.client_ip || null,
-    product_id: data.product_id || null,
-  });
+      let cssCount = 0;
+      if (tab.id) {
+        const pageUrl = (await chrome.tabs.get(tab.id).catch(() => null))?.url || webUrl;
+        cssCount = await applyCssRules(tab.id, pageUrl, rules);
+        for (const ms of [400, 1200, 3000]) {
+          setTimeout(() => {
+            void chrome.tabs
+              .get(tab.id)
+              .then((t) => applyCssRules(tab.id, t?.url || webUrl, rules))
+              .catch(() => {});
+          }, ms);
+        }
+      }
+
+      const warnNote = integrityAction === 'warn' ? ';integrity=warn' : '';
+      await reportLaunch({
+        reseller_id: data.reseller_id,
+        tool_id: data.tool_id,
+        success: true,
+        reason: `mode=${transport.mode};jar=${seeded.set}/${seeded.attempted};dnrHosts=${dnrHosts || seeded.hosts.length};strip=${strip ? 1 : 0};lease=${leaseSeconds};rules=${dnrCount};css=${cssCount}${warnNote}`,
+        inject_strategy: strategy,
+        duration_ms: Date.now() - started,
+        extension_id: chrome.runtime.id,
+        username: data.username || null,
+        client_ip: data.client_ip || null,
+        product_id: data.product_id || null,
+      });
+    } catch (err) {
+      console.warn('[1clk-v2] post-open launch finish failed', err);
+    }
+  })();
 
   return {
     success: true,

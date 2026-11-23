@@ -12,12 +12,19 @@ import CryptoJS from 'crypto-js';
 export const COOKIE_VAULT_MAGIC = 'OC1Z:';
 const COMPRESS_MAGIC = COOKIE_VAULT_MAGIC;
 
-/** Strip JSON whitespace before compress — smaller ciphertext, same data. */
+/**
+ * Strip JSON whitespace before compress — smaller ciphertext, same data.
+ * Cookie-Editor often exports a bare array — wrap as { cookies: [...] }.
+ */
 function minifyCookiePlain(plain: string): string {
   const trimmed = plain.trim();
   if (!trimmed) return trimmed;
   try {
-    return JSON.stringify(JSON.parse(trimmed));
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (Array.isArray(parsed)) {
+      return JSON.stringify({ cookies: parsed, localStorage: {}, sessionStorage: {} });
+    }
+    return JSON.stringify(parsed);
   } catch {
     return trimmed;
   }

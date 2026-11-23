@@ -137,17 +137,20 @@ export async function checkIntegrity() {
   }
 }
 
-/** @returns {Promise<'allow' | 'warn' | 'block'>} */
+/**
+ * Launch path must stay fast — never block on hashing every file + API.
+ * Missing/stale cache: allow now, refresh in background (alarm/watch still enforces).
+ * @returns {Promise<'allow' | 'warn' | 'block'>}
+ */
 export async function getIntegrityAction() {
   const stored = await chrome.storage.local.get('oneclk_integrity');
   const row = stored.oneclk_integrity;
   if (!row) {
-    const fresh = await checkIntegrity();
-    return fresh.action;
+    void checkIntegrity();
+    return 'allow';
   }
   if (Date.now() - (row.checked_at || 0) > 15 * 60 * 1000) {
-    const fresh = await checkIntegrity();
-    return fresh.action;
+    void checkIntegrity();
   }
   return row.action || 'allow';
 }

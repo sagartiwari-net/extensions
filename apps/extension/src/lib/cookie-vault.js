@@ -18,11 +18,22 @@
  */
 export function unwrapLaunchSession(data) {
   if (!data || typeof data !== 'object') return {};
+
+  // Rare: API/session itself is a Cookie-Editor array
+  if (Array.isArray(data)) {
+    return { cookies: data, localStorage: {}, sessionStorage: {} };
+  }
+
   const root = /** @type {Record<string, unknown>} */ (data);
 
   // Current API: { session: { cookies, localStorage, ... }, ... }
+  if (Array.isArray(root.session)) {
+    return { cookies: root.session, localStorage: {}, sessionStorage: {} };
+  }
   if (root.session && typeof root.session === 'object') {
-    return /** @type {Record<string, unknown>} */ (root.session);
+    const sess = /** @type {Record<string, unknown>} */ (root.session);
+    if (Array.isArray(sess.cookies) || sess.Cookies || sess.localStorage) return sess;
+    return sess;
   }
 
   // Already a session blob
