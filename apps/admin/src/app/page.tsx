@@ -12,8 +12,8 @@ type Me = { success: boolean; user?: { username: string; role: string } };
 
 export default function LoginPage() {
   const router = useRouter();
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('admin123');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
