@@ -4,7 +4,7 @@
  *
  * Usage: npx tsx src/scripts/normalize-tool-keys.ts
  */
-import mysql from 'mysql2/promise';
+import mysql, { type RowDataPacket } from 'mysql2/promise';
 import { env } from '../env.js';
 import {
   applyToolKeyPrefix,
@@ -12,22 +12,23 @@ import {
   siteCodeFromLegacyKey,
 } from '../lib/tool-key.js';
 
+type ResellerRow = RowDataPacket & { id: number; key_prefix: string; slug: string };
+type ToolRow = RowDataPacket & { id: number; tool_key: string };
+
 async function main() {
   const conn = await mysql.createConnection({ uri: env.databaseUrl });
   try {
-    const [resellers] = await conn.query<
-      { id: number; key_prefix: string; slug: string }[]
-    >('SELECT id, key_prefix, slug FROM resellers');
+    const [resellers] = await conn.query<ResellerRow[]>('SELECT id, key_prefix, slug FROM resellers');
 
-    for (const r of resellers as unknown as { id: number; key_prefix: string; slug: string }[]) {
+    for (const r of resellers) {
       const prefix = r.key_prefix;
-      const [tools] = await conn.query<{ id: number; tool_key: string }[]>(
+      const [tools] = await conn.query<ToolRow[]>(
         'SELECT id, tool_key FROM tools WHERE reseller_id = ? ORDER BY id ASC',
         [r.id],
       );
       const used = new Set<string>();
       let changed = 0;
-      for (const t of tools as unknown as { id: number; tool_key: string }[]) {
+      for (const t of tools) {
         const site = siteCodeFromLegacyKey(prefix, t.tool_key);
         if (!site) {
           console.warn('skip empty', r.slug, t.id, t.tool_key);
@@ -42,7 +43,7 @@ async function main() {
           console.log(`${r.slug}: ${t.tool_key} → ${next}`);
         }
       }
-      console.log(`done ${r.slug}: ${changed}/${(tools as unknown as unknown[]).length}`);
+      console.log(`done ${r.slug}: ${changed}/${tools.length}`);
     }
   } finally {
     await conn.end();
