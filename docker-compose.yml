@@ -1,0 +1,36 @@
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    ports:
+      - "${MYSQL_PORT:-3307}:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-oneclk_root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-oneclk_v2}
+      MYSQL_USER: ${MYSQL_USER:-oneclk}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-oneclk_pass}
+    volumes:
+      - oneclk_mysql:/var/lib/mysql
+      # Schema applied via `npm run db:migrate` (file bind-mount into initdb fails on some Colima/volume setups)
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-oneclk_root}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - oneclk_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  oneclk_mysql:
+  oneclk_redis:

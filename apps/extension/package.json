@@ -1,0 +1,15 @@
+{
+  "name": "@oneclk/extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "build:prod": "node build.mjs --obfuscate",
+    "watch": "node build.mjs --watch"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.1",
+    "javascript-obfuscator": "^5.10.1"
+  }
+}

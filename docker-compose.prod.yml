@@ -1,0 +1,97 @@
+# Production stack — MySQL + Redis + API + Admin
+# Usage:
+#   cp .env.production.example .env
+#   # fill secrets
+#   docker compose -f docker-compose.prod.yml up -d --build
+#   docker compose -f docker-compose.prod.yml exec api node dist/scripts/migrate.js
+#   # seed once from a workstation with DATABASE_URL → server (or npm run db:seed over tunnel)
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-oneclk_v2}
+      MYSQL_USER: ${MYSQL_USER:-oneclk}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - oneclk_prod_mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    networks:
+      - oneclk
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - oneclk_prod_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - oneclk
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: mysql://${MYSQL_USER:-oneclk}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-oneclk_v2}
+      REDIS_URL: redis://redis:6379
+      API_HOST: 0.0.0.0
+      API_PORT: 4000
+      TRUST_PROXY: "true"
+      COOKIE_SECURE: "true"
+      UPLOADS_DIR: /data/uploads
+    volumes:
+      # Branding icons + generated extension ZIPs (persist across recreate)
+      - oneclk_prod_uploads:/data/uploads
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${API_PUBLISH_PORT:-4000}:4000"
+    networks:
+      - oneclk
+    # NOTE: In-admin "My extension → Generate ZIP" needs apps/extension + `zip` CLI.
+    # Prefer generating ZIPs on CI/Mac with EXTENSION_API_BASE pointing at prod, then
+    # upload hashes via Extensions — or extend the API image with extension source + zip.
+
+  admin:
+    build:
+      context: .
+      dockerfile: apps/admin/Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE}
+    depends_on:
+      - api
+    ports:
+      - "${ADMIN_PUBLISH_PORT:-3000}:3000"
+    networks:
+      - oneclk
+
+volumes:
+  oneclk_prod_mysql:
+  oneclk_prod_redis:
+  oneclk_prod_uploads:
+
+networks:
+  oneclk:
+    driver: bridge

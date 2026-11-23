@@ -1,0 +1,31 @@
+{
+  "name": "oneclk-v2",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run dev -w @oneclk/api",
+    "dev:admin": "npm run dev -w @oneclk/admin",
+    "build": "npm run build -w @oneclk/shared && npm run build -w @oneclk/crypto && npm run build -w @oneclk/api && npm run build -w @oneclk/admin",
+    "build:extension": "npm run build -w @oneclk/extension",
+    "build:extension:prod": "npm run build:prod -w @oneclk/extension --",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:reset": "docker compose down -v && docker compose up -d && npm run db:migrate",
+    "db:migrate": "npm run migrate -w @oneclk/api",
+    "db:seed": "npm run seed -w @oneclk/api",
+    "db:seed:old": "npm run seed:old -w @oneclk/api",
+    "db:import-rules": "npm run db:import-rules -w @oneclk/api",
+    "db:import-cookies": "npm run db:import-cookies -w @oneclk/api",
+    "db:reseal-cookies": "npm run db:reseal-cookies -w @oneclk/api",
+    "prod:up": "docker compose -f docker-compose.prod.yml up -d --build",
+    "prod:down": "docker compose -f docker-compose.prod.yml down",
+    "typecheck": "npm run typecheck -ws --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

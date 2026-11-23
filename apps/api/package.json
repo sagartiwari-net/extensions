@@ -1,0 +1,39 @@
+{
+  "name": "@oneclk/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "migrate": "tsx src/scripts/migrate.ts",
+    "seed": "tsx src/scripts/seed.ts",
+    "seed:old": "tsx src/scripts/seed-from-old.ts",
+    "db:import-cookies": "tsx src/scripts/import-cookies-from-old.ts",
+    "db:import-rules": "tsx src/scripts/import-rules-from-old.ts",
+    "db:reseal-cookies": "tsx src/scripts/reseal-cookies.ts"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/cors": "^11.0.1",
+    "@oneclk/crypto": "0.1.0",
+    "@oneclk/shared": "0.1.0",
+    "archiver": "^8.0.0",
+    "bcryptjs": "^3.0.2",
+    "dotenv": "^16.4.7",
+    "fastify": "^5.2.1",
+    "ioredis": "^5.6.0",
+    "mysql2": "^3.14.0",
+    "sharp": "^0.35.5",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/archiver": "^8.0.0",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^22.13.10",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}

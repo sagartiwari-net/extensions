@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.next/
+out/
+.env
+.env.local
+.env.production
+*.log
+.DS_Store
+coverage/
+apps/extension/dist/
+apps/extension/dist-prod/
+apps/api/data/
+apps/api/uploads/
+*.sql.gz
+*.dump
+.rea-*/
