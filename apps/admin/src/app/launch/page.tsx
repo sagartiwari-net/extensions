@@ -156,6 +156,23 @@ function LaunchInner() {
         } catch {
           /* */
         }
+        // Same-tab aMember: brief success → history.back() to member/tools page.
+        // New-tab bridge (Access hub window.open): usually length===1 → close tab.
+        setTimeout(() => {
+          try {
+            if (window.history.length > 1 && document.referrer) {
+              window.history.back();
+              return;
+            }
+          } catch {
+            /* */
+          }
+          try {
+            window.close();
+          } catch {
+            /* non-script tabs cannot close themselves */
+          }
+        }, 1200);
         return;
       }
       // Ignore "already used" after a success race; otherwise show error once
@@ -290,7 +307,7 @@ function LaunchInner() {
           {phase === 'ok' ? (
             <p className="mt-2 text-sm leading-relaxed text-zinc-600">
               You are in — <span className="font-medium text-zinc-900">{displaySiteName}</span> tools are
-              opening
+              opening. Returning…
             </p>
           ) : null}
 
