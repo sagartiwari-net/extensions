@@ -152,7 +152,7 @@ const manifest = {
   externally_connectable: {
     matches: CLIENT_CONFIG.EXTERNALLY_CONNECTABLE,
   },
-  optional_host_permissions: ['http://*/*', 'https://*/*'],
+  // Do not duplicate host_permissions wildcards — Chrome warns + omits them.
 };
 
 writeFileSync(join(outdir, 'manifest.json'), JSON.stringify(manifest, null, 2));
@@ -191,6 +191,8 @@ async function obfuscateDist() {
     return;
   }
   // DigitaVision-style unreadability. Milder on service worker (must boot reliably).
+  // CRITICAL: disableConsoleOutput injects `window` — MV3 SW has no window → registration
+  // fails with "Uncaught ReferenceError: window is not defined" / status code 15.
   const targets = [
     { rel: 'background.js', strong: false },
     { rel: 'content/member.js', strong: true },
@@ -201,29 +203,31 @@ async function obfuscateDist() {
     const full = join(outdir, rel);
     if (!existsSync(full)) continue;
     const source = readFileSync(full, 'utf8');
+    const isSw = rel === 'background.js';
     const result = JavaScriptObfuscator.obfuscate(source, {
       compact: true,
       controlFlowFlattening: strong,
       controlFlowFlatteningThreshold: strong ? 0.35 : 0,
       deadCodeInjection: false,
       debugProtection: false,
-      disableConsoleOutput: true,
+      disableConsoleOutput: false,
       identifierNamesGenerator: 'hexadecimal',
       renameGlobals: false,
       selfDefending: false,
       simplify: true,
-      splitStrings: true,
+      splitStrings: !isSw,
       splitStringsChunkLength: strong ? 6 : 8,
       stringArray: true,
       stringArrayCallsTransform: strong,
-      stringArrayEncoding: ['base64'],
+      stringArrayEncoding: isSw ? [] : ['base64'],
       stringArrayIndexShift: true,
       stringArrayRotate: true,
       stringArrayShuffle: true,
-      stringArrayThreshold: strong ? 0.85 : 0.75,
+      stringArrayThreshold: strong ? 0.85 : isSw ? 0.5 : 0.75,
       transformObjectKeys: strong,
       unicodeEscapeSequence: false,
-      target: 'browser',
+      // browser-no-eval avoids Function()+window console shim paths in SW.
+      target: isSw ? 'browser-no-eval' : 'browser',
     });
     writeFileSync(full, result.getObfuscatedCode());
   }
