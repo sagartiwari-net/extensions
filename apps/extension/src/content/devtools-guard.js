@@ -2,7 +2,10 @@
  * Page-side DevTools guard — always on for http(s) pages.
  * Docked size delta + F12 / Ctrl+Shift+I + console trap.
  */
+import { CLIENT_CONFIG } from '../config.gen.js';
+
 (function devtoolsGuard() {
+  if (CLIENT_CONFIG.DEBUG || CLIENT_CONFIG.DEBUG_SKIP_INTEGRITY) return;
   if (window.__oneclk_devtools_guard) return;
   window.__oneclk_devtools_guard = true;
 

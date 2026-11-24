@@ -1,6 +1,6 @@
 import { CLIENT_CONFIG } from './config.gen.js';
 import { sessionLooksUsable, unwrapLaunchSession } from './lib/cookie-vault.js';
-import { debugLog, getDebugLogs, summarizeSession } from './lib/debug-log.js';
+import { clearDebugLogs, debugLog, getDebugLogs, summarizeSession } from './lib/debug-log.js';
 import { clearCookiesForApexDomain, cookiesForInject } from './lib/cookies.js';
 import {
   apexFromHost,
@@ -98,7 +98,12 @@ async function boot() {
   startMultiHostNavSync();
   registerJarScrubKeepalive();
   startCssNavigationHook();
-  startDevtoolsMonitor();
+  // Local DEBUG build: allow SW/popup inspect + keep security on prod packs
+  if (!CLIENT_CONFIG.DEBUG && !CLIENT_CONFIG.DEBUG_SKIP_INTEGRITY) {
+    startDevtoolsMonitor();
+  } else {
+    console.log('[1clk-debug] DevTools kill monitor OFF (debug build)');
+  }
   startRulesSync();
   startPageNoNavigationHook();
 }
@@ -561,8 +566,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg?.type === 'DEBUG_LOGS') {
     getDebugLogs()
-      .then((logs) => sendResponse({ ok: true, logs, debug: !!CLIENT_CONFIG.DEBUG }))
+      .then((logs) =>
+        sendResponse({
+          ok: true,
+          logs,
+          debug: !!CLIENT_CONFIG.DEBUG,
+          slug: CLIENT_CONFIG.SLUG,
+          api: CLIENT_CONFIG.API_BASE,
+        }),
+      )
       .catch(() => sendResponse({ ok: false, logs: [] }));
+    return true;
+  }
+  if (msg?.type === 'DEBUG_CLEAR') {
+    clearDebugLogs()
+      .then(() => sendResponse({ ok: true }))
+      .catch(() => sendResponse({ ok: false }));
     return true;
   }
   if (msg?.type === 'IS_LAUNCH_TAB') {

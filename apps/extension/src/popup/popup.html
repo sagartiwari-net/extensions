@@ -2,13 +2,13 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>1Clk</title>
+    <title>1Clk Debug</title>
     <style>
       body {
         margin: 0;
         font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
-        min-width: 360px;
-        max-width: 480px;
+        min-width: 380px;
+        max-width: 520px;
         padding: 12px;
         background: #0f1419;
         color: #e8eef4;
@@ -16,9 +16,15 @@
       #status {
         color: #8b9aab;
         margin-bottom: 8px;
+        white-space: pre-wrap;
       }
       strong {
         color: #3d9cf0;
+      }
+      .hint {
+        color: #64748b;
+        font-size: 11px;
+        margin-bottom: 10px;
       }
       button {
         background: #1e2a38;
@@ -32,6 +38,10 @@
       }
       button:hover {
         background: #243447;
+      }
+      button.primary {
+        background: #0e4d7a;
+        border-color: #1d6fa5;
       }
       #logs {
         max-height: 360px;
@@ -50,11 +60,17 @@
   <body>
     <div><strong id="title">1Clk</strong></div>
     <div id="status">Checking…</div>
-    <div>
-      <button type="button" id="btnLogs">Refresh debug logs</button>
-      <button type="button" id="btnCopy">Copy logs</button>
+    <div class="hint">
+      Production security on. Debug build: SW inspect kill is OFF. Use Save log file — no service
+      worker console needed.
     </div>
-    <div id="logs">Launch Jasper once, then refresh logs here or open service worker console.</div>
+    <div>
+      <button type="button" class="primary" id="btnSave">Save log file</button>
+      <button type="button" id="btnLogs">Refresh</button>
+      <button type="button" id="btnCopy">Copy</button>
+      <button type="button" id="btnClear">Clear</button>
+    </div>
+    <div id="logs">1) Jasper Access chalao 2) yahan Refresh / Save log file</div>
     <script src="./popup.js"></script>
   </body>
 </html>

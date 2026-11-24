@@ -1,13 +1,14 @@
 import { CLIENT_CONFIG } from '../config.gen.js';
 
 const LOG_KEY = 'oneclk_debug_logs';
-const MAX = 80;
+const LOG_LOCAL_KEY = 'oneclk_debug_logs_persistent';
+const MAX = 120;
 
 export function isDebugBuild() {
   return !!(CLIENT_CONFIG.DEBUG || CLIENT_CONFIG.DEBUG_SKIP_INTEGRITY);
 }
 
-/** Persist + console — open SW DevTools to watch live. */
+/** Persist to session + local storage (no SW console needed). */
 export async function debugLog(tag, payload) {
   const line = {
     t: new Date().toISOString(),
@@ -20,18 +21,23 @@ export async function debugLog(tag, payload) {
     const { [LOG_KEY]: prev = [] } = await chrome.storage.session.get(LOG_KEY);
     const next = [...prev, line].slice(-MAX);
     await chrome.storage.session.set({ [LOG_KEY]: next });
+    // Survive SW sleep / popup close
+    await chrome.storage.local.set({ [LOG_LOCAL_KEY]: next });
   } catch {
     /* */
   }
 }
 
 export async function getDebugLogs() {
-  const { [LOG_KEY]: prev = [] } = await chrome.storage.session.get(LOG_KEY);
-  return prev;
+  const session = await chrome.storage.session.get(LOG_KEY);
+  if (Array.isArray(session[LOG_KEY]) && session[LOG_KEY].length) return session[LOG_KEY];
+  const local = await chrome.storage.local.get(LOG_LOCAL_KEY);
+  return local[LOG_LOCAL_KEY] || [];
 }
 
 export async function clearDebugLogs() {
   await chrome.storage.session.remove(LOG_KEY);
+  await chrome.storage.local.remove(LOG_LOCAL_KEY);
 }
 
 /** Safe vault shape for logs (no token values). */
