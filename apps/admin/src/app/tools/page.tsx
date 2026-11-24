@@ -36,6 +36,7 @@ type Tool = {
   web_url: string;
   status: string;
   inject_strategy: string;
+  cookie_jar_mode?: string;
   has_cookie: number;
   pool_id: number | null;
 };
@@ -48,6 +49,7 @@ type ToolForm = {
   name: string;
   web_url: string;
   inject_strategy: string;
+  cookie_jar_mode: string;
   status: string;
   pool_id: string;
   cookie_plain: string;
@@ -79,6 +81,7 @@ const emptyForm = (resellerId = ''): ToolForm => ({
   name: '',
   web_url: 'https://example.com/',
   inject_strategy: 'cookies',
+  cookie_jar_mode: 'auto',
   status: 'active',
   pool_id: '',
   cookie_plain: sampleCookie,
@@ -190,6 +193,7 @@ export default function ToolsPage() {
       name: tool.name,
       web_url: tool.web_url,
       inject_strategy: tool.inject_strategy || 'cookies',
+      cookie_jar_mode: tool.cookie_jar_mode || 'auto',
       status: tool.status || 'active',
       pool_id: tool.pool_id ? String(tool.pool_id) : '',
       cookie_plain: '',
@@ -232,12 +236,15 @@ export default function ToolsPage() {
           name: form.name,
           web_url: form.web_url,
           inject_strategy: form.inject_strategy,
+          cookie_jar_mode: form.cookie_jar_mode || 'auto',
           status: form.status,
           cookie_plain: form.cookie_plain?.trim() || undefined,
           cookie_formats:
-            form.inject_strategy === 'storage_reload'
-              ? ['cookies', 'localStorage', 'sessionStorage']
-              : ['cookies'],
+            form.inject_strategy === 'idb'
+              ? ['indexedDB', 'localStorage', 'sessionStorage', 'cookies']
+              : form.inject_strategy === 'storage_reload'
+                ? ['cookies', 'localStorage', 'sessionStorage']
+                : ['cookies'],
         }),
       });
       setShowCreate(false);
@@ -262,11 +269,14 @@ export default function ToolsPage() {
         name: form.name,
         web_url: form.web_url,
         inject_strategy: form.inject_strategy,
+        cookie_jar_mode: form.cookie_jar_mode || 'auto',
         status: form.status,
         cookie_formats:
-          form.inject_strategy === 'storage_reload'
-            ? ['cookies', 'localStorage', 'sessionStorage']
-            : ['cookies'],
+          form.inject_strategy === 'idb'
+            ? ['indexedDB', 'localStorage', 'sessionStorage', 'cookies']
+            : form.inject_strategy === 'storage_reload'
+              ? ['cookies', 'localStorage', 'sessionStorage']
+              : ['cookies'],
       };
       if (form.cookie_plain.trim()) {
         body.cookie_plain = form.cookie_plain.trim();
@@ -515,9 +525,26 @@ export default function ToolsPage() {
             >
               <option value="cookies">Cookies only</option>
               <option value="storage_reload">Cookies + localStorage</option>
+              <option value="idb">IndexedDB / page storage (Jasper, Quillbot)</option>
             </select>
             <p className="text-xs text-muted-foreground">
-              Most tools = Cookies only. ChatGPT / apps that need storage = Cookies + localStorage.
+              Jasper / Quillbot = IndexedDB. Grammarly-style LS = Cookies + localStorage. Most SEO
+              tools = Cookies only.
+            </p>
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label>Save cookies in browser</Label>
+            <select
+              className="h-8 rounded-lg border border-input bg-background px-2.5 text-sm"
+              value={form.cookie_jar_mode || 'auto'}
+              onChange={(e) => setForm({ ...form, cookie_jar_mode: e.target.value })}
+            >
+              <option value="auto">Auto (detect)</option>
+              <option value="browser">Yes — browser jar (Grammarly style, clear on disable)</option>
+              <option value="extension_only">No — extension only (Semrush / DNR)</option>
+            </select>
+            <p className="text-xs text-muted-foreground">
+              Yes = chrome.cookies jar. No = Cookie header via extension only (no site jar leak).
             </p>
           </div>
           <div className="flex flex-col gap-2">

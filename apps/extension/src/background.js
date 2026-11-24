@@ -349,7 +349,8 @@ async function processLaunch(token, askedClient) {
   }
 
   const cookieList = cookiesForInject(session.cookies || session.Cookies || []);
-  const transport = resolveCookieTransport(session, webUrl);
+  const jarMode = data.cookie_jar_mode || 'auto';
+  const transport = resolveCookieTransport(session, webUrl, { jarMode });
   await clearDnrCookieSession().catch(() => {});
   await clearLaunchRefererRule().catch(() => {});
 

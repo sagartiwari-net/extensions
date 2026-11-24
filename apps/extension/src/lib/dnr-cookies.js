@@ -246,7 +246,38 @@ function isMultiApiSpaCookies(cookies = []) {
  *   leaseJar: boolean,
  * }}
  */
-export function resolveCookieTransport(session = {}, toolUrl = '') {
+/**
+ * @param {Record<string, unknown>} session
+ * @param {string} toolUrl
+ * @param {{ jarMode?: 'auto' | 'browser' | 'extension_only' }} [opts]
+ */
+export function resolveCookieTransport(session = {}, toolUrl = '', opts = {}) {
+  const jarMode = opts.jarMode || session.cookie_jar_mode || 'auto';
+
+  // Explicit admin override (DigitaVision set_to_browser Yes/No)
+  if (jarMode === 'browser') {
+    return {
+      mode: 'jar',
+      useDnrCookies: false,
+      writeJar: true,
+      stripSetCookie: true,
+      scrubJar: false,
+      leaseJar: true,
+      aggressiveStrip: false,
+    };
+  }
+  if (jarMode === 'extension_only') {
+    return {
+      mode: 'extension_only',
+      useDnrCookies: true,
+      writeJar: false,
+      stripSetCookie: true,
+      scrubJar: true,
+      leaseJar: false,
+      aggressiveStrip: false,
+    };
+  }
+
   const cookies = session.cookies || session.Cookies || [];
   const hasPageStorage = sessionHasPageStorage(session);
   const cookieOnly = !hasPageStorage;

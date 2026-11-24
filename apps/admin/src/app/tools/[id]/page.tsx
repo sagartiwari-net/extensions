@@ -35,6 +35,7 @@ type Tool = {
   web_url: string;
   status: string;
   inject_strategy: string;
+  cookie_jar_mode?: string;
   security_tier: number;
   has_cookie: boolean;
   vault_preview?: VaultPreview | null;
@@ -277,6 +278,7 @@ export default function ToolDetailPage() {
                       tool_key: String(fd.get('tool_key') || ''),
                       web_url: String(fd.get('web_url') || ''),
                       inject_strategy: String(fd.get('inject_strategy') || 'cookies'),
+                      cookie_jar_mode: String(fd.get('cookie_jar_mode') || 'auto'),
                       status: String(fd.get('status') || 'active'),
                     }),
                   })
@@ -331,7 +333,21 @@ export default function ToolDetailPage() {
                       key={`strat-${tool.inject_strategy}`}
                     >
                       <option value="cookies">cookies</option>
-                      <option value="storage_reload">storage_reload</option>
+                      <option value="storage_reload">storage_reload (LS/SS)</option>
+                      <option value="idb">idb (IndexedDB / Jasper)</option>
+                    </select>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label>Save cookies in browser</Label>
+                    <select
+                      name="cookie_jar_mode"
+                      className="h-8 rounded-lg border border-input bg-background px-2.5 text-sm"
+                      defaultValue={tool.cookie_jar_mode || 'auto'}
+                      key={`jar-${tool.cookie_jar_mode || 'auto'}`}
+                    >
+                      <option value="auto">Auto</option>
+                      <option value="browser">Yes — browser jar</option>
+                      <option value="extension_only">No — extension only</option>
                     </select>
                   </div>
                   <div className="flex flex-col gap-2">

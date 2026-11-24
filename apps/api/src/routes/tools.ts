@@ -87,6 +87,7 @@ type ToolListRow = RowDataPacket & {
   web_url: string;
   status: string;
   inject_strategy: string;
+  cookie_jar_mode?: string | null;
   security_tier: number;
   pool_id: number | null;
   has_cookie: number;
@@ -210,7 +211,7 @@ export const toolRoutes: FastifyPluginAsync = async (app) => {
 
       const [rows] = await pool.query<ToolListRow[]>(
         `SELECT t.id, t.reseller_id, r.slug AS reseller_slug, t.tool_key, t.name, t.web_url,
-                t.status, t.inject_strategy, t.security_tier, t.pool_id, t.updated_at,
+                t.status, t.inject_strategy, t.cookie_jar_mode, t.security_tier, t.pool_id, t.updated_at,
                 (t.cookie_payload IS NOT NULL AND t.cookie_payload <> '') AS has_cookie
          FROM tools t
          JOIN resellers r ON r.id = t.reseller_id
@@ -334,6 +335,7 @@ export const toolRoutes: FastifyPluginAsync = async (app) => {
           web_url: tool.web_url,
           status: tool.status,
           inject_strategy: tool.inject_strategy,
+          cookie_jar_mode: tool.cookie_jar_mode || 'auto',
           security_tier: tool.security_tier,
           pool_id: tool.pool_id,
           cookie_formats: tool.cookie_formats,
@@ -390,11 +392,12 @@ export const toolRoutes: FastifyPluginAsync = async (app) => {
         }
       }
       const formats = JSON.stringify(formatsList);
+      const jarMode = body.cookie_jar_mode || 'auto';
       const [res] = await pool.query<ResultSetHeader>(
         `INSERT INTO tools
-          (reseller_id, tool_key, name, web_url, status, inject_strategy, cookie_formats,
+          (reseller_id, tool_key, name, web_url, status, inject_strategy, cookie_jar_mode, cookie_formats,
            cookie_payload, cookie_password, security_tier)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           resellerId,
           toolKey,
@@ -402,6 +405,7 @@ export const toolRoutes: FastifyPluginAsync = async (app) => {
           body.web_url,
           body.status ?? 'active',
           injectStrategy,
+          jarMode,
           formats,
           payload,
           password,
@@ -438,6 +442,7 @@ export const toolRoutes: FastifyPluginAsync = async (app) => {
         name: body.name,
         web_url: body.web_url,
         inject_strategy: body.inject_strategy,
+        cookie_jar_mode: body.cookie_jar_mode,
         security_tier: body.security_tier,
         status: body.status,
         tool_key: nextToolKey,

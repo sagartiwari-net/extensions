@@ -67,6 +67,8 @@ export const createToolSchema = z.object({
   name: z.string().trim().min(1).max(255),
   web_url: z.string().url().max(500),
   inject_strategy: z.enum(INJECT_STRATEGIES).default('cookies'),
+  /** Where HTTP cookies live: browser jar (Grammarly) vs extension DNR only (Semrush). */
+  cookie_jar_mode: z.enum(['auto', 'browser', 'extension_only']).default('auto'),
   security_tier: z
     .number()
     .int()

@@ -105,6 +105,8 @@ CREATE TABLE `tools` (
   `status` ENUM('active', 'updating', 'disabled') NOT NULL DEFAULT 'active',
   `updating_message` TEXT NULL,
   `inject_strategy` ENUM('cookies', 'storage_reload', 'idb', 'dnr_headers', 'custom') NOT NULL DEFAULT 'cookies',
+  `cookie_jar_mode` ENUM('auto', 'browser', 'extension_only') NOT NULL DEFAULT 'auto'
+    COMMENT 'browser=Grammarly jar; extension_only=Semrush DNR; auto=detect',
   `inject_custom_id` VARCHAR(64) NULL,
   `cookie_formats` JSON NULL COMMENT '["cookies","localStorage","sessionStorage","indexedDB"]',
   `cookie_payload` LONGTEXT NULL COMMENT 'used when pool_id IS NULL',

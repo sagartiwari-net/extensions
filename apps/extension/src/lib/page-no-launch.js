@@ -135,7 +135,10 @@ export async function tryPageNoInject(tabId, url, opts = {}) {
 
   const bundle = await getPageNoBundle(tabId);
   if (!bundle?.session) {
-    await debugLog('page_no.skip', { tabId, pageHost, reason: 'no_bundle' });
+    // Panel /launch + member tabs hit content backup with no tool bundle — ignore noise
+    if (!/1clkaccess\.store$|toolsmandi\.com$/i.test(pageHost)) {
+      await debugLog('page_no.skip', { tabId, pageHost, reason: 'no_bundle' });
+    }
     return false;
   }
 
