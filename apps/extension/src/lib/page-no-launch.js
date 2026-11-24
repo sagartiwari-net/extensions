@@ -1,6 +1,8 @@
 /**
  * DigitaVision / old page_no: inject LS/SS/IDB at navigation commit on the tool
  * origin — before the SPA boots and races Firebase IDB (Jasper, Quillbot, …).
+ *
+ * executeScript uses a self-contained MAIN-world func (see idb-inject.js).
  */
 import { applyPageStorageMainWorld, sessionNeedsPageStorage } from './idb-inject.js';
 
@@ -13,6 +15,15 @@ function hostKey(url) {
   } catch {
     return '';
   }
+}
+
+/** app.jasper.ai ↔ jasper.ai */
+function hostsMatch(pageHost, toolHost) {
+  if (!pageHost || !toolHost) return false;
+  if (pageHost === toolHost) return true;
+  if (pageHost.endsWith(`.${toolHost}`)) return true;
+  if (toolHost.endsWith(`.${pageHost}`)) return true;
+  return false;
 }
 
 export async function savePageNoBundle(tabId, webUrl, session) {
@@ -33,43 +44,61 @@ export async function clearPageNoBundle(tabId) {
     INJECTED_KEY,
   ]);
   delete map[String(tabId)];
-  delete inj[String(tabId)];
+  for (const k of Object.keys(inj)) {
+    if (k.startsWith(`${tabId}:`)) delete inj[k];
+  }
   await chrome.storage.session.set({ [BUNDLE_KEY]: map, [INJECTED_KEY]: inj });
 }
 
 async function markInjected(tabId, host) {
   const { [INJECTED_KEY]: inj = {} } = await chrome.storage.session.get(INJECTED_KEY);
-  const key = `${tabId}:${host}`;
-  inj[key] = Date.now();
+  inj[`${tabId}:${host}`] = Date.now();
   await chrome.storage.session.set({ [INJECTED_KEY]: inj });
 }
 
-async function wasInjected(tabId, host) {
+export async function isPageNoInjected(tabId, host) {
   const { [INJECTED_KEY]: inj = {} } = await chrome.storage.session.get(INJECTED_KEY);
   return !!inj[`${tabId}:${host}`];
 }
 
-export async function tryPageNoInject(tabId, url) {
+export async function getPageNoBundle(tabId) {
+  const { [BUNDLE_KEY]: map = {} } = await chrome.storage.session.get(BUNDLE_KEY);
+  return map[String(tabId)] || null;
+}
+
+export async function tryPageNoInject(tabId, url, opts = {}) {
   if (!url?.startsWith('http') || !tabId) return false;
   const pageHost = hostKey(url);
   if (!pageHost) return false;
 
-  const { [BUNDLE_KEY]: map = {} } = await chrome.storage.session.get(BUNDLE_KEY);
-  const bundle = map[String(tabId)];
+  const bundle = await getPageNoBundle(tabId);
   if (!bundle?.session) return false;
 
   const toolHost = bundle.host || hostKey(bundle.webUrl);
-  if (!toolHost || pageHost !== toolHost) return false;
-  if (await wasInjected(tabId, pageHost)) return true;
+  if (!hostsMatch(pageHost, toolHost)) return false;
+  if (await isPageNoInjected(tabId, pageHost)) return true;
 
   try {
-    await chrome.scripting.executeScript({
+    const results = await chrome.scripting.executeScript({
       target: { tabId },
       world: 'MAIN',
       func: applyPageStorageMainWorld,
       args: [bundle.session],
     });
+    const result = results?.[0]?.result;
+    console.log('[page_no] inject ok', pageHost, result);
     await markInjected(tabId, pageHost);
+
+    // Firebase Auth reads IDB once at boot — if SPA already painted login, force one reload
+    if (opts.reload !== false && sessionNeedsPageStorage(bundle.session)) {
+      const { [INJECTED_KEY]: inj = {} } = await chrome.storage.session.get(INJECTED_KEY);
+      const reloadKey = `${tabId}:reloaded`;
+      if (!inj[reloadKey]) {
+        inj[reloadKey] = Date.now();
+        await chrome.storage.session.set({ [INJECTED_KEY]: inj });
+        await chrome.tabs.reload(tabId, { bypassCache: true }).catch(() => {});
+      }
+    }
     return true;
   } catch (err) {
     console.warn('[page_no] inject failed', pageHost, err);
@@ -78,7 +107,7 @@ export async function tryPageNoInject(tabId, url) {
 }
 
 /** Block until first tool-origin inject or timeout. */
-export function waitForPageNoInject(tabId, toolUrl, timeoutMs = 20000) {
+export function waitForPageNoInject(tabId, toolUrl, timeoutMs = 25000) {
   const origin = hostKey(toolUrl);
   return new Promise((resolve) => {
     let done = false;
@@ -97,7 +126,7 @@ export function waitForPageNoInject(tabId, toolUrl, timeoutMs = 20000) {
     const onCommit = (details) => {
       if (details.tabId !== tabId || details.frameId !== 0) return;
       if (!details.url?.startsWith('http')) return;
-      if (hostKey(details.url) !== origin) return;
+      if (!hostsMatch(hostKey(details.url), origin)) return;
       void tryPageNoInject(tabId, details.url).then((ok) => {
         if (ok) finish(true);
       });
@@ -106,7 +135,6 @@ export function waitForPageNoInject(tabId, toolUrl, timeoutMs = 20000) {
     const timer = setTimeout(() => finish(false), timeoutMs);
     chrome.webNavigation.onCommitted.addListener(onCommit);
 
-    // Tab may already be loading
     void chrome.tabs.get(tabId).then((t) => {
       if (t?.url?.startsWith('http')) void tryPageNoInject(tabId, t.url).then((ok) => ok && finish(true));
     });

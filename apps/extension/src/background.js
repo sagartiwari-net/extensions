@@ -12,8 +12,11 @@ import {
 import { sessionNeedsPageStorage } from './lib/idb-inject.js';
 import {
   clearPageNoBundle,
+  getPageNoBundle,
+  isPageNoInjected,
   savePageNoBundle,
   startPageNoNavigationHook,
+  tryPageNoInject,
   waitForPageNoInject,
 } from './lib/page-no-launch.js';
 import { applyLaunchReferer, clearLaunchRefererRule } from './lib/referer-dnr.js';
@@ -418,11 +421,13 @@ async function processLaunch(token, askedClient) {
     });
     if (needsPageStorage) {
       await savePageNoBundle(tab.id, webUrl, session);
-      const navReady = waitForPageNoInject(tab.id, webUrl, 20000);
+      const navReady = waitForPageNoInject(tab.id, webUrl, 25000);
       await chrome.tabs.update(tab.id, { url: webUrl });
       // Member bridge returns ASAP — IDB inject continues in background
       void navReady.then(async (injected) => {
         try {
+          await markLaunchTabIsolated(tab.id, webUrl).catch(() => {});
+          await notifyLaunchTab(tab.id, webUrl, cookieNames).catch(() => {});
           if (transport.writeJar) {
             await syncJarCookiesForUrl(session, webUrl, webUrl, leaseSeconds).catch(() => {});
           }
@@ -445,7 +450,8 @@ async function processLaunch(token, askedClient) {
         } catch (err) {
           console.warn('[1clk-v2] page_no finish failed', err);
         } finally {
-          void clearPageNoBundle(tab.id);
+          // Keep bundle briefly so document_start backup / post-reload can still see it
+          setTimeout(() => void clearPageNoBundle(tab.id), 60000);
         }
       });
     }
@@ -533,9 +539,47 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg?.type === 'IS_LAUNCH_TAB') {
     const url = msg.url || _sender?.tab?.url || '';
-    isLaunchUrl(url)
-      .then((res) => sendResponse({ yes: !!res?.yes, cookieNames: res?.cookieNames || [] }))
+    const tabId = _sender?.tab?.id;
+    Promise.all([
+      isLaunchUrl(url),
+      tabId ? getPageNoBundle(tabId) : Promise.resolve(null),
+      chrome.storage.session.get(ACTIVE_LAUNCH_KEY),
+    ])
+      .then(([res, bundle, store]) => {
+        const active = store?.[ACTIVE_LAUNCH_KEY];
+        const yes =
+          !!res?.yes ||
+          !!bundle ||
+          (active && tabId && Number(active.tabId) === Number(tabId));
+        sendResponse({ yes, cookieNames: res?.cookieNames || [] });
+      })
       .catch(() => sendResponse({ yes: false, cookieNames: [] }));
+    return true;
+  }
+  if (msg?.type === 'PAGE_NO_CHECK') {
+    const tabId = _sender?.tab?.id;
+    const host = String(msg.toolHost || '')
+      .replace(/^www\./, '')
+      .toLowerCase();
+    if (!tabId || !host) {
+      sendResponse({ done: false });
+      return false;
+    }
+    isPageNoInjected(tabId, host)
+      .then((done) => sendResponse({ done }))
+      .catch(() => sendResponse({ done: false }));
+    return true;
+  }
+  if (msg?.type === 'PAGE_NO_BACKUP_INJECT') {
+    const tabId = _sender?.tab?.id;
+    const pageUrl = msg.pageUrl || _sender?.tab?.url || '';
+    if (!tabId || !pageUrl) {
+      sendResponse({ ok: false });
+      return false;
+    }
+    tryPageNoInject(tabId, pageUrl)
+      .then((ok) => sendResponse({ ok }))
+      .catch(() => sendResponse({ ok: false }));
     return true;
   }
   if (msg?.type === 'ENSURE_WATCHDOG') {
