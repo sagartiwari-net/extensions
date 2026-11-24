@@ -11,7 +11,7 @@ Also create (recommended) API vhost:
 
 | Item | Value |
 |------|--------|
-| API URL | `https://api.1clkaccess.store` |
+| API URL | `https://panel.1clkaccess.store` (same host `/api` + `/health`; `api.` subdomain not required) |
 | Proxy | `http://127.0.0.1:4000` |
 
 Panel nginx → `http://127.0.0.1:3000`.
@@ -49,8 +49,9 @@ nano .env   # fill SESSION_SECRET, DATABASE_URL, passwords, API URLs
 DATABASE_URL=mysql://ExtensionSystem:YOUR_PASSWORD@127.0.0.1:3306/extensionsystem
 ADMIN_ORIGIN=https://panel.1clkaccess.store
 CORS_ORIGINS=https://panel.1clkaccess.store
-NEXT_PUBLIC_API_BASE=https://api.1clkaccess.store
-EXTENSION_API_BASE=https://api.1clkaccess.store/api
+NEXT_PUBLIC_API_BASE=https://panel.1clkaccess.store
+EXTENSION_API_BASE=https://panel.1clkaccess.store/api
+# Do NOT use api.1clkaccess.store unless that DNS A-record exists (currently NXDOMAIN)
 COOKIE_SECURE=true
 COOKIE_SAMESITE=none
 TRUST_PROXY=true

@@ -7,7 +7,8 @@ export const CLIENT_CONFIG = {
   RESELLER_SLUG: 'toolsmandi',
   NAME: 'ToolsMandi DEBUG (local)',
   DESCRIPTION: 'Local unpacked debug — verbose page_no / IDB logs',
-  API_BASE: 'https://api.1clkaccess.store/api',
+  // api.1clkaccess.store has no DNS (NXDOMAIN) — API is proxied on the panel host
+  API_BASE: 'https://panel.1clkaccess.store/api',
   MEMBER_MATCHES: [
     'https://toolsmandi.com/*',
     'https://*.toolsmandi.com/*',
