@@ -9,7 +9,13 @@ import {
   setupExtensionOnlyCookieSession,
   setupSetCookieStrip,
 } from './lib/dnr-cookies.js';
-import { applyPageStorageMainWorld, sessionNeedsPageStorage } from './lib/idb-inject.js';
+import { sessionNeedsPageStorage } from './lib/idb-inject.js';
+import {
+  clearPageNoBundle,
+  savePageNoBundle,
+  startPageNoNavigationHook,
+  waitForPageNoInject,
+} from './lib/page-no-launch.js';
 import { applyLaunchReferer, clearLaunchRefererRule } from './lib/referer-dnr.js';
 import { startExtensionEnforcement, syncAndEnforceExtensions } from './lib/enforcement.js';
 import { checkIntegrity, getIntegrityAction, startIntegrityWatch } from './lib/integrity.js';
@@ -90,6 +96,7 @@ async function boot() {
   startCssNavigationHook();
   startDevtoolsMonitor();
   startRulesSync();
+  startPageNoNavigationHook();
 }
 
 /** Re-stamp missing jar cookies on SPA subdomain hops (jar mode only). Debounced. */
@@ -385,7 +392,14 @@ async function processLaunch(token, askedClient) {
     null;
   await applyLaunchReferer(webUrl, launchReferer).catch(() => {});
 
-  const tab = await chrome.tabs.create({ url: webUrl, active: true });
+  const needsPageStorage =
+    sessionNeedsPageStorage(session) || strategy === 'storage_reload' || strategy === 'idb';
+
+  // page_no: open blank first, register vault, then navigate — inject at commit before SPA
+  const tab = await chrome.tabs.create({
+    url: needsPageStorage ? 'about:blank' : webUrl,
+    active: true,
+  });
   const cookieNames = cookieList.map((c) => c.name).filter(Boolean);
 
   // Mark active launch immediately so kill-switch / watchdog can attach without waiting for load.
@@ -402,10 +416,44 @@ async function processLaunch(token, askedClient) {
         at: Date.now(),
       },
     });
+    if (needsPageStorage) {
+      await savePageNoBundle(tab.id, webUrl, session);
+      const navReady = waitForPageNoInject(tab.id, webUrl, 20000);
+      await chrome.tabs.update(tab.id, { url: webUrl });
+      // Member bridge returns ASAP — IDB inject continues in background
+      void navReady.then(async (injected) => {
+        try {
+          if (transport.writeJar) {
+            await syncJarCookiesForUrl(session, webUrl, webUrl, leaseSeconds).catch(() => {});
+          }
+          await injectPageWatchdog(tab.id, webUrl, cookieNames);
+          const pageUrl = (await chrome.tabs.get(tab.id).catch(() => null))?.url || webUrl;
+          const cssCount = await applyCssRules(tab.id, pageUrl, rules);
+          const warnNote = integrityAction === 'warn' ? ';integrity=warn' : '';
+          await reportLaunch({
+            reseller_id: data.reseller_id,
+            tool_id: data.tool_id,
+            success: true,
+            reason: `mode=${transport.mode};jar=${seeded.set}/${seeded.attempted};dnrHosts=${dnrHosts || seeded.hosts.length};strip=${strip ? 1 : 0};lease=${leaseSeconds};rules=${dnrCount};css=${cssCount};page_no=1;idb=${injected ? 1 : 0}${warnNote}`,
+            inject_strategy: strategy,
+            duration_ms: Date.now() - started,
+            extension_id: chrome.runtime.id,
+            username: data.username || null,
+            client_ip: data.client_ip || null,
+            product_id: data.product_id || null,
+          });
+        } catch (err) {
+          console.warn('[1clk-v2] page_no finish failed', err);
+        } finally {
+          void clearPageNoBundle(tab.id);
+        }
+      });
+    }
   }
 
-  // Member bridge must not wait for tool page load (was 5–7s). Finish inject async.
+  // Cookie-only path: finish inject async without blocking member bridge
   void (async () => {
+    if (needsPageStorage) return; // handled above
     try {
       await waitForTabComplete(tab.id, 45000).catch(() => {});
 
@@ -429,28 +477,6 @@ async function processLaunch(token, askedClient) {
         await injectPageWatchdog(tab.id, webUrl, cookieNames);
       }
 
-      // LS / SS / indexedDB (Jasper Firebase, etc.) — content-driven, not only strategy flag
-      const needsPageStorage =
-        sessionNeedsPageStorage(session) ||
-        strategy === 'storage_reload' ||
-        strategy === 'idb';
-      if (needsPageStorage && tab.id) {
-        await chrome.scripting
-          .executeScript({
-            target: { tabId: tab.id },
-            world: 'MAIN',
-            func: applyPageStorageMainWorld,
-            args: [session, { reload: true }],
-          })
-          .catch((err) => console.warn('[1clk-v2] page storage inject failed', err));
-        // applyPageStorageMainWorld reloads; wait for that navigation
-        await waitForTabComplete(tab.id, 45000).catch(() => {});
-        if (transport.writeJar) {
-          await syncJarCookiesForUrl(session, webUrl, webUrl, leaseSeconds).catch(() => {});
-        }
-        await injectPageWatchdog(tab.id, webUrl, cookieNames);
-      }
-
       let cssCount = 0;
       if (tab.id) {
         const pageUrl = (await chrome.tabs.get(tab.id).catch(() => null))?.url || webUrl;
@@ -466,11 +492,12 @@ async function processLaunch(token, askedClient) {
       }
 
       const warnNote = integrityAction === 'warn' ? ';integrity=warn' : '';
+      const pageNoNote = needsPageStorage ? ';page_no=1' : '';
       await reportLaunch({
         reseller_id: data.reseller_id,
         tool_id: data.tool_id,
         success: true,
-        reason: `mode=${transport.mode};jar=${seeded.set}/${seeded.attempted};dnrHosts=${dnrHosts || seeded.hosts.length};strip=${strip ? 1 : 0};lease=${leaseSeconds};rules=${dnrCount};css=${cssCount}${warnNote}`,
+        reason: `mode=${transport.mode};jar=${seeded.set}/${seeded.attempted};dnrHosts=${dnrHosts || seeded.hosts.length};strip=${strip ? 1 : 0};lease=${leaseSeconds};rules=${dnrCount};css=${cssCount}${warnNote}${pageNoNote}`,
         inject_strategy: strategy,
         duration_ms: Date.now() - started,
         extension_id: chrome.runtime.id,
@@ -480,6 +507,8 @@ async function processLaunch(token, askedClient) {
       });
     } catch (err) {
       console.warn('[1clk-v2] post-open launch finish failed', err);
+    } finally {
+      if (tab.id) void clearPageNoBundle(tab.id);
     }
   })();
 

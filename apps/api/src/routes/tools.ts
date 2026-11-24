@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { ResultSetHeader, RowDataPacket } from 'mysql2';
 import { createToolSchema, updateToolSchema } from '@oneclk/shared';
-import { encryptCookieData, sha256Hex } from '@oneclk/crypto';
+import { decryptCookieData, encryptCookieData, sha256Hex } from '@oneclk/crypto';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { pool } from '../db.js';
@@ -284,6 +284,45 @@ export const toolRoutes: FastifyPluginAsync = async (app) => {
       const user = requireUser(req);
       const id = Number((req.params as { id: string }).id);
       const tool = await assertToolAccess(user, id);
+
+      // Decrypt vault metadata only (counts) so admin can see why Jasper launch fails
+      let vault_preview: {
+        usable: boolean;
+        cookies: number;
+        localStorage: number;
+        sessionStorage: number;
+        indexedDB: number;
+        formats: string[];
+        referer: boolean;
+        error?: string;
+      } | null = null;
+      if (tool.cookie_payload && tool.cookie_password) {
+        try {
+          const plain = decryptCookieData(tool.cookie_payload, tool.cookie_password);
+          const vault = normalizeVault(JSON.parse(plain) as unknown);
+          vault_preview = {
+            usable: vaultLooksUsable(vault),
+            cookies: vault.cookies.length,
+            localStorage: Object.keys(vault.localStorage).length,
+            sessionStorage: Object.keys(vault.sessionStorage).length,
+            indexedDB: vault.indexedDB ? Object.keys(vault.indexedDB).length : 0,
+            formats: vault.includedFormats,
+            referer: Boolean(vault.referer),
+          };
+        } catch (e) {
+          vault_preview = {
+            usable: false,
+            cookies: 0,
+            localStorage: 0,
+            sessionStorage: 0,
+            indexedDB: 0,
+            formats: [],
+            referer: false,
+            error: e instanceof Error ? e.message : 'decrypt failed',
+          };
+        }
+      }
+
       return {
         success: true,
         item: {
@@ -300,6 +339,7 @@ export const toolRoutes: FastifyPluginAsync = async (app) => {
           cookie_formats: tool.cookie_formats,
           updating_message: tool.updating_message,
           has_cookie: Boolean(tool.has_cookie),
+          vault_preview,
           proxy_enabled: tool.proxy_enabled,
           proxy_profile_id: tool.proxy_profile_id,
           user_agent_profile_id: tool.user_agent_profile_id,

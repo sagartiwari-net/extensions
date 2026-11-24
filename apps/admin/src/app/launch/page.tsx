@@ -67,7 +67,13 @@ function friendlyError(raw: string): string {
   if (msg.includes('integrity')) {
     return 'This extension was changed or is outdated. Please download a fresh copy and install it again.';
   }
-  if (msg.includes('no cookies') || msg.includes('session has no') || msg.includes('no cookie data')) {
+  if (
+    msg.includes('no cookies') ||
+    msg.includes('session has no') ||
+    msg.includes('session vault empty') ||
+    msg.includes('no cookie data') ||
+    msg.includes('vault empty')
+  ) {
     return 'Access is not ready for this tool yet. Please contact support.';
   }
   if (msg.includes('missing launch token') || msg.includes('missing token')) {

@@ -79,11 +79,28 @@ export function normalizeVault(raw: unknown, refererOverride?: string | null): N
     nonEmptyObject(nested.SessionStorage) ||
     {};
 
-  const indexedDB =
+  let indexedDB =
     nonEmptyObject(obj.indexedDB) ||
     nonEmptyObject(obj.IndexedDB) ||
+    nonEmptyObject(obj.indexed_db) ||
     nonEmptyObject(nested.indexedDB) ||
+    nonEmptyObject(nested.indexed_db) ||
     null;
+  // DigitaVision sometimes stores indexedDB as a JSON string
+  if (!indexedDB && typeof obj.indexedDB === 'string') {
+    try {
+      indexedDB = nonEmptyObject(JSON.parse(obj.indexedDB as string));
+    } catch {
+      /* */
+    }
+  }
+  if (!indexedDB && typeof obj.indexed_db === 'string') {
+    try {
+      indexedDB = nonEmptyObject(JSON.parse(obj.indexed_db as string));
+    } catch {
+      /* */
+    }
+  }
 
   const refererFromPaste =
     typeof obj.referer === 'string'

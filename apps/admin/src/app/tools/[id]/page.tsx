@@ -15,6 +15,17 @@ import { Textarea } from '@/components/ui/textarea';
 import { useMe } from '@/hooks/use-me';
 import { api } from '@/lib/api';
 
+type VaultPreview = {
+  usable: boolean;
+  cookies: number;
+  localStorage: number;
+  sessionStorage: number;
+  indexedDB: number;
+  formats: string[];
+  referer: boolean;
+  error?: string;
+};
+
 type Tool = {
   id: number;
   reseller_id: number;
@@ -26,6 +37,7 @@ type Tool = {
   inject_strategy: string;
   security_tier: number;
   has_cookie: boolean;
+  vault_preview?: VaultPreview | null;
   pool_id: number | null;
   proxy_enabled?: number;
   proxy_profile_id?: number | null;
@@ -202,8 +214,25 @@ export default function ToolDetailPage() {
         </Card>
         <Card size="sm">
           <CardHeader className="pb-1">
-            <CardDescription>Cookie</CardDescription>
-            <CardTitle className="text-base">{tool.has_cookie ? 'On file' : 'Missing'}</CardTitle>
+            <CardDescription>Vault</CardDescription>
+            <CardTitle className="text-base">
+              {!tool.has_cookie
+                ? 'Missing'
+                : tool.vault_preview?.usable
+                  ? 'Ready'
+                  : tool.vault_preview?.error
+                    ? 'Decrypt fail'
+                    : 'Empty / not usable'}
+            </CardTitle>
+            {tool.vault_preview ? (
+              <CardDescription className="pt-1 text-[11px] leading-snug">
+                c:{tool.vault_preview.cookies} ls:{tool.vault_preview.localStorage} ss:
+                {tool.vault_preview.sessionStorage} idb:{tool.vault_preview.indexedDB}
+                {tool.vault_preview.formats?.length
+                  ? ` · ${tool.vault_preview.formats.join('+')}`
+                  : ''}
+              </CardDescription>
+            ) : null}
           </CardHeader>
         </Card>
         <Card size="sm">

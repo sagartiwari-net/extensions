@@ -200,7 +200,7 @@ export async function consumeSessionToken(token: string) {
     const vault = normalizeVault(JSON.parse(plain) as unknown);
     if (!vaultLooksUsable(vault)) {
       const err = new Error(
-        'Session has no cookies/storage/indexedDB — paste Cookie-Editor array, {"cookies":[...]}, or indexedDB/localStorage vault',
+        'Session vault empty (need cookies, localStorage, sessionStorage, or indexedDB) — re-save Jasper/Quillbot vault from admin',
       ) as Error & { statusCode: number };
       err.statusCode = 400;
       throw err;
