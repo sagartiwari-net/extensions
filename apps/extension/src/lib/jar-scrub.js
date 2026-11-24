@@ -1,17 +1,18 @@
 /**
- * Keepalive:
+ * Keepalive for MULTIPLE open tools:
  * - jar mode (Grammarly): renew short leases so cookies don't die mid-session
- * - extension_only (ChatGPT): rare jar-leak scrub
+ * - extension_only (ChatGPT): rare jar-leak scrub per apex
  *
- * Uses chrome.alarms so SW sleep cannot skip renew (port-only renew was breaking Grammarly).
+ * Uses chrome.alarms so SW sleep cannot skip renew.
  */
 import { apexFromHost } from './dnr-cookies.js';
 import { relatedApexes } from './launch-tab.js';
 import { JAR_LEASE_SECONDS, renewJarCookieLease } from './multi-host-cookies.js';
 
 const ACTIVE_LAUNCH_KEY = 'oneclk_active_launch';
-const LEASE_KEY = 'oneclk_jar_lease';
-const SCRUB_KEY = 'oneclk_ext_only_scrub';
+const LAUNCHES_KEY = 'oneclk_active_launches';
+const LEASES_KEY = 'oneclk_jar_leases';
+const SCRUBS_KEY = 'oneclk_ext_only_scrubs';
 const ALARM_NAME = 'oneclk_jar_keepalive';
 const MIN_TICK_MS = 25000;
 const PORT_INTERVAL_MS = 30000;
@@ -40,69 +41,91 @@ export async function startJarAuthScrub(toolUrl, extraNames = []) {
   } catch {
     return;
   }
-  await chrome.storage.session.set({
-    [LEASE_KEY]: { apex, toolUrl, leaseSeconds: JAR_LEASE_SECONDS, at: Date.now() },
-    [SCRUB_KEY]: {
-      apex,
-      toolUrl,
-      names: (extraNames || []).filter(Boolean),
-      at: Date.now(),
-    },
-  });
+  const { [LEASES_KEY]: leases = {}, [SCRUBS_KEY]: scrubs = {} } =
+    await chrome.storage.session.get([LEASES_KEY, SCRUBS_KEY]);
+  leases[apex] = { apex, toolUrl, leaseSeconds: JAR_LEASE_SECONDS, at: Date.now() };
+  scrubs[apex] = {
+    apex,
+    toolUrl,
+    names: (extraNames || []).filter(Boolean),
+    at: Date.now(),
+  };
+  await chrome.storage.session.set({ [LEASES_KEY]: leases, [SCRUBS_KEY]: scrubs });
   try {
     await chrome.alarms.create(ALARM_NAME, { periodInMinutes: 0.5 });
   } catch {
-    // Chrome may clamp to 1 min — still better than nothing
     await chrome.alarms.create(ALARM_NAME, { periodInMinutes: 1 }).catch(() => {});
   }
 }
 
-export async function stopJarAuthScrub() {
-  await chrome.storage.session.remove([LEASE_KEY, SCRUB_KEY]);
-  try {
-    await chrome.alarms.clear(ALARM_NAME);
-  } catch {
-    /* */
+export async function stopJarAuthScrub(toolUrl = null) {
+  if (!toolUrl) {
+    await chrome.storage.session.remove([LEASES_KEY, SCRUBS_KEY, 'oneclk_jar_lease', 'oneclk_ext_only_scrub']);
+    try {
+      await chrome.alarms.clear(ALARM_NAME);
+    } catch {
+      /* */
+    }
+    return;
   }
+  let apex = '';
+  try {
+    apex = apexFromHost(new URL(toolUrl).hostname);
+  } catch {
+    return;
+  }
+  const { [LEASES_KEY]: leases = {}, [SCRUBS_KEY]: scrubs = {} } =
+    await chrome.storage.session.get([LEASES_KEY, SCRUBS_KEY]);
+  delete leases[apex];
+  delete scrubs[apex];
+  await chrome.storage.session.set({ [LEASES_KEY]: leases, [SCRUBS_KEY]: scrubs });
 }
 
 export async function scrubExtensionOnlyJarLeaks() {
-  const { [ACTIVE_LAUNCH_KEY]: active } = await chrome.storage.session.get(ACTIVE_LAUNCH_KEY);
-  const { [SCRUB_KEY]: scrub } = await chrome.storage.session.get(SCRUB_KEY);
-  if (!active?.webUrl || active.transport !== 'extension_only') return 0;
-
-  let apex = '';
-  try {
-    apex = apexFromHost(new URL(active.webUrl).hostname);
-  } catch {
-    return 0;
+  const { [LAUNCHES_KEY]: launches = {}, [SCRUBS_KEY]: scrubs = {} } =
+    await chrome.storage.session.get([LAUNCHES_KEY, SCRUBS_KEY]);
+  const list = Object.values(launches).filter((l) => l?.transport === 'extension_only' && l.webUrl);
+  if (!list.length) {
+    // Fallback: legacy single active launch
+    const { [ACTIVE_LAUNCH_KEY]: active } = await chrome.storage.session.get(ACTIVE_LAUNCH_KEY);
+    if (active?.webUrl && active.transport === 'extension_only') list.push(active);
   }
-  const apexes = relatedApexes(apex);
-  const nameSet = new Set([...(scrub?.names || []), ...(active.cookieNames || [])].filter(Boolean));
 
   let removed = 0;
-  for (const a of apexes) {
-    const batches = await Promise.all([
-      chrome.cookies.getAll({ domain: a }).catch(() => []),
-      chrome.cookies.getAll({ domain: `.${a}` }).catch(() => []),
-    ]);
-    const jobs = [];
-    for (const batch of batches) {
-      for (const c of batch || []) {
-        if (!c?.name) continue;
-        if (!nameSet.has(c.name) && !isAuthLeakName(c.name)) continue;
-        const url = `https://${(c.domain || a).replace(/^\./, '')}${c.path || '/'}`;
-        jobs.push(
-          chrome.cookies
-            .remove({ url, name: c.name })
-            .then(() => {
-              removed += 1;
-            })
-            .catch(() => {}),
-        );
-      }
+  for (const active of list) {
+    let apex = '';
+    try {
+      apex = apexFromHost(new URL(active.webUrl).hostname);
+    } catch {
+      continue;
     }
-    if (jobs.length) await Promise.all(jobs);
+    const scrub = scrubs[apex] || {};
+    const apexes = relatedApexes(apex);
+    const nameSet = new Set([...(scrub.names || []), ...(active.cookieNames || [])].filter(Boolean));
+
+    for (const a of apexes) {
+      const batches = await Promise.all([
+        chrome.cookies.getAll({ domain: a }).catch(() => []),
+        chrome.cookies.getAll({ domain: `.${a}` }).catch(() => []),
+      ]);
+      const jobs = [];
+      for (const batch of batches) {
+        for (const c of batch || []) {
+          if (!c?.name) continue;
+          if (!nameSet.has(c.name) && !isAuthLeakName(c.name)) continue;
+          const url = `https://${(c.domain || a).replace(/^\./, '')}${c.path || '/'}`;
+          jobs.push(
+            chrome.cookies
+              .remove({ url, name: c.name })
+              .then(() => {
+                removed += 1;
+              })
+              .catch(() => {}),
+          );
+        }
+      }
+      if (jobs.length) await Promise.all(jobs);
+    }
   }
   return removed;
 }
@@ -117,14 +140,24 @@ export async function renewJarLeaseFromActiveLaunch() {
   tickInFlight = true;
   lastTickAt = now;
   try {
-    const { [ACTIVE_LAUNCH_KEY]: active } = await chrome.storage.session.get(ACTIVE_LAUNCH_KEY);
-    if (!active?.webUrl) return 0;
-    if (active.transport === 'extension_only') {
-      return scrubExtensionOnlyJarLeaks();
+    const { [LAUNCHES_KEY]: launches = {}, [ACTIVE_LAUNCH_KEY]: active } =
+      await chrome.storage.session.get([LAUNCHES_KEY, ACTIVE_LAUNCH_KEY]);
+    const list = Object.values(launches);
+    if (!list.length && active?.webUrl) list.push(active);
+
+    let renewed = 0;
+    for (const launch of list) {
+      if (!launch?.webUrl) continue;
+      if (launch.transport === 'extension_only') {
+        renewed += await scrubExtensionOnlyJarLeaks();
+        continue;
+      }
+      if (launch.transport === 'page_storage') continue;
+      if (!launch.session) continue;
+      const lease = launch.leaseSeconds > 0 ? launch.leaseSeconds : JAR_LEASE_SECONDS;
+      renewed += await renewJarCookieLease(launch.session, launch.webUrl, lease);
     }
-    if (!active.session) return 0;
-    const lease = active.leaseSeconds > 0 ? active.leaseSeconds : JAR_LEASE_SECONDS;
-    return renewJarCookieLease(active.session, active.webUrl, lease);
+    return renewed;
   } finally {
     tickInFlight = false;
   }
@@ -146,7 +179,6 @@ export function registerJarScrubKeepalive() {
   chrome.runtime.onConnect.addListener((port) => {
     if (port.name !== 'oneclk_keepalive' && port.name !== 'kill_switch_link') return;
 
-    // Critical: renew immediately on connect — delayed-only tick let Grammarly leases expire
     void renewJarLeaseFromActiveLaunch();
 
     let timer = null;

@@ -331,6 +331,21 @@ export function resolveCookieTransport(session = {}, toolUrl = '', opts = {}) {
     };
   }
 
+  // Jasper/Quillbot: IndexedDB only — no HTTP cookies to lease/scrub
+  const hasCookies =
+    Array.isArray(cookies) && cookies.some((c) => c && (c.name || c.Name));
+  if (hasPageStorage && !hasCookies) {
+    return {
+      mode: 'page_storage',
+      useDnrCookies: false,
+      writeJar: false,
+      stripSetCookie: false,
+      scrubJar: false,
+      leaseJar: false,
+      aggressiveStrip: false,
+    };
+  }
+
   if (hasPageStorage) {
     return {
       mode: 'jar',
@@ -486,11 +501,56 @@ export async function setupExtensionOnlyCookieSession(toolUrl, cookies = [], opt
     aggressiveStrip: !!aggressiveStrip,
     at: Date.now(),
   };
-  await chrome.storage.session.set({ oneclk_dnr_cookie: meta });
-  await chrome.storage.local.set({ oneclk_dnr_cookie_durable: meta });
+  // Multi-tool: keep ChatGPT DNR while Jasper/Grammarly also open
+  const { oneclk_dnr_by_apex: byApex = {} } = await chrome.storage.local.get('oneclk_dnr_by_apex');
+  byApex[apex] = meta;
+  await chrome.storage.session.set({ oneclk_dnr_cookie: meta, oneclk_dnr_by_apex: byApex });
+  await chrome.storage.local.set({
+    oneclk_dnr_cookie_durable: meta,
+    oneclk_dnr_by_apex: byApex,
+  });
   return meta;
 }
 
+function collectMetaRuleIds(meta, ids) {
+  if (!meta) return;
+  for (const id of meta.ruleIds || []) ids.add(id);
+  const apexes = [
+    ...(meta.apex ? [meta.apex] : []),
+    ...((meta.apexes || []).length ? meta.apexes : relatedApexes(meta.apex || '')),
+  ];
+  for (const a of apexes) {
+    if (!a) continue;
+    ids.add(stripRuleId(a));
+    ids.add(hostRuleId(a));
+  }
+  for (const host of meta.hosts || []) ids.add(hostRuleId(host));
+}
+
+/** Clear DNR cookie/strip rules for one tool apex only (multi-tab safe). */
+export async function clearDnrCookieSessionForApex(apexIn) {
+  const apex = apexFromHost(apexIn);
+  if (!apex) return;
+  const { oneclk_dnr_by_apex: byApex = {} } = await chrome.storage.local.get('oneclk_dnr_by_apex');
+  const meta = byApex[apex];
+  const ids = new Set();
+  collectMetaRuleIds(meta, ids);
+  for (const a of relatedApexes(apex)) {
+    ids.add(stripRuleId(a));
+    ids.add(hostRuleId(a));
+    if (byApex[a]) collectMetaRuleIds(byApex[a], ids);
+    delete byApex[a];
+  }
+  if (ids.size) {
+    await chrome.declarativeNetRequest
+      .updateDynamicRules({ removeRuleIds: [...ids] })
+      .catch(() => {});
+  }
+  await chrome.storage.local.set({ oneclk_dnr_by_apex: byApex });
+  await chrome.storage.session.set({ oneclk_dnr_by_apex: byApex });
+}
+
+/** Full wipe — extension disable / DevTools kill only. */
 export async function clearDnrCookieSession() {
   const { oneclk_dnr_strip: s } = await chrome.storage.session.get('oneclk_dnr_strip');
   const { oneclk_dnr_strip_durable: d } = await chrome.storage.local.get('oneclk_dnr_strip_durable');
@@ -498,32 +558,23 @@ export async function clearDnrCookieSession() {
   const { oneclk_dnr_cookie_durable: legacyD } = await chrome.storage.local.get(
     'oneclk_dnr_cookie_durable',
   );
+  const { oneclk_dnr_by_apex: byApex = {} } = await chrome.storage.local.get('oneclk_dnr_by_apex');
 
-  const ids = new Set([
-    ...(s?.ruleIds || []),
-    ...(d?.ruleIds || []),
-    ...(legacy?.ruleIds || []),
-    ...(legacyD?.ruleIds || []),
-  ]);
-  for (const meta of [s, d, legacy, legacyD]) {
-    const apexes = [
-      ...(meta?.apex ? [meta.apex] : []),
-      ...((meta?.apexes || []).length ? meta.apexes : relatedApexes(meta?.apex || '')),
-    ];
-    for (const a of apexes) {
-      if (!a) continue;
-      ids.add(stripRuleId(a));
-      ids.add(hostRuleId(a));
-    }
-    for (const host of meta?.hosts || []) ids.add(hostRuleId(host));
+  const ids = new Set();
+  for (const meta of [s, d, legacy, legacyD, ...Object.values(byApex)]) {
+    collectMetaRuleIds(meta, ids);
   }
   if (ids.size) {
     await chrome.declarativeNetRequest
       .updateDynamicRules({ removeRuleIds: [...ids] })
       .catch(() => {});
   }
-  await chrome.storage.session.remove(['oneclk_dnr_strip', 'oneclk_dnr_cookie']);
-  await chrome.storage.local.remove(['oneclk_dnr_strip_durable', 'oneclk_dnr_cookie_durable']);
+  await chrome.storage.session.remove(['oneclk_dnr_strip', 'oneclk_dnr_cookie', 'oneclk_dnr_by_apex']);
+  await chrome.storage.local.remove([
+    'oneclk_dnr_strip_durable',
+    'oneclk_dnr_cookie_durable',
+    'oneclk_dnr_by_apex',
+  ]);
 }
 
 /** SW idle restart — DNR dynamic rules already persist; only re-apply jar strip if needed. */

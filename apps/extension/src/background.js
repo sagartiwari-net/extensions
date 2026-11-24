@@ -5,6 +5,7 @@ import { clearCookiesForApexDomain, cookiesForInject } from './lib/cookies.js';
 import {
   apexFromHost,
   clearDnrCookieSession,
+  clearDnrCookieSessionForApex,
   resolveCookieTransport,
   restoreDnrCookieSessionIfNeeded,
   setupExtensionOnlyCookieSession,
@@ -86,6 +87,7 @@ async function injectPageWatchdog(tabId, launchUrl, cookieNames = []) {
 }
 
 const ACTIVE_LAUNCH_KEY = 'oneclk_active_launch';
+const LAUNCHES_KEY = 'oneclk_active_launches';
 
 async function boot() {
   const recovered = await recoverAfterDisableIfNeeded().catch(() => false);
@@ -371,10 +373,16 @@ async function processLaunch(token, askedClient) {
   const cookieList = cookiesForInject(session.cookies || session.Cookies || []);
   const jarMode = data.cookie_jar_mode || 'auto';
   const transport = resolveCookieTransport(session, webUrl, { jarMode });
-  await clearDnrCookieSession().catch(() => {});
+  // Multi-tool: only clear THIS apex's DNR — do not wipe ChatGPT when opening Jasper
+  try {
+    const launchApex = apexFromHost(new URL(webUrl).hostname);
+    await clearDnrCookieSessionForApex(launchApex).catch(() => {});
+  } catch {
+    /* */
+  }
   await clearLaunchRefererRule().catch(() => {});
 
-  // Always wipe leftover jar auth for this apex + related (ChatGPT↔OpenAI).
+  // Wipe leftover jar auth for this apex only (ChatGPT↔OpenAI related).
   try {
     const launchApex = apexFromHost(new URL(webUrl).hostname);
     for (const a of relatedApexes(launchApex)) {
@@ -399,19 +407,17 @@ async function processLaunch(token, askedClient) {
     dnrHosts = dnr.hosts?.length || 0;
     strip = !!transport.stripSetCookie;
     seeded = { attempted: cookieList.length, set: 0, hosts: dnr.hosts || [] };
-    // Scrub any Set-Cookie leaks so jar stays empty while extension is on.
     if (transport.scrubJar) {
       await startJarAuthScrub(webUrl, cookieList.map((c) => c.name).filter(Boolean));
-    } else {
-      await stopJarAuthScrub().catch(() => {});
     }
+  } else if (transport.mode === 'page_storage') {
+    // Jasper IDB-only — no jar/DNR cookies
+    seeded = { attempted: 0, set: 0, hosts: [] };
   } else {
-    // Grammarly: jar + short lease (launch #52 worked; #53 extension_only+scrub spun).
+    // Grammarly: jar + short lease
     seeded = await seedJarCookiesMultiHost(session, webUrl, { leaseSeconds });
     if (transport.leaseJar) {
       await startJarAuthScrub(webUrl);
-    } else {
-      await stopJarAuthScrub().catch(() => {});
     }
     if (transport.stripSetCookie) {
       try {
@@ -430,8 +436,8 @@ async function processLaunch(token, askedClient) {
     null;
   await applyLaunchReferer(webUrl, launchReferer).catch(() => {});
 
-  const needsPageStorage =
-    sessionNeedsPageStorage(session) || strategy === 'storage_reload' || strategy === 'idb';
+  // Only real LS/SS/IDB vault → page_no. Ignore empty storage_reload strategy (Semrush).
+  const needsPageStorage = sessionNeedsPageStorage(session);
   await debugLog('launch.mode', {
     needsPageStorage,
     strategy,
@@ -451,16 +457,20 @@ async function processLaunch(token, askedClient) {
   // Mark active launch immediately so kill-switch / watchdog can attach without waiting for load.
   if (tab.id) {
     await saveLaunchCleanup(tab.id, webUrl, cookieList).catch(() => {});
+    const launchRecord = {
+      tabId: tab.id,
+      webUrl,
+      session: transport.writeJar ? session : { ...session, cookies: [] },
+      transport: transport.mode,
+      leaseSeconds,
+      cookieNames,
+      at: Date.now(),
+    };
+    const { [LAUNCHES_KEY]: launches = {} } = await chrome.storage.session.get(LAUNCHES_KEY);
+    launches[String(tab.id)] = launchRecord;
     await chrome.storage.session.set({
-      [ACTIVE_LAUNCH_KEY]: {
-        tabId: tab.id,
-        webUrl,
-        session: transport.writeJar ? session : { ...session, cookies: [] },
-        transport: transport.mode,
-        leaseSeconds,
-        cookieNames,
-        at: Date.now(),
-      },
+      [ACTIVE_LAUNCH_KEY]: launchRecord,
+      [LAUNCHES_KEY]: launches,
     });
     if (needsPageStorage) {
       await savePageNoBundle(tab.id, webUrl, session);

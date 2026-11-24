@@ -252,5 +252,11 @@ export function startPageNoNavigationHook() {
   });
   chrome.tabs.onRemoved.addListener((tabId) => {
     void clearPageNoBundle(tabId);
+    void chrome.storage.session.get('oneclk_active_launches').then((store) => {
+      const launches = store.oneclk_active_launches || {};
+      if (!launches[String(tabId)]) return;
+      delete launches[String(tabId)];
+      void chrome.storage.session.set({ oneclk_active_launches: launches });
+    });
   });
 }
