@@ -6,23 +6,55 @@
     <style>
       body {
         margin: 0;
-        font: 13px/1.4 system-ui, sans-serif;
-        min-width: 220px;
+        font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+        min-width: 360px;
+        max-width: 480px;
         padding: 12px;
         background: #0f1419;
         color: #e8eef4;
       }
       #status {
         color: #8b9aab;
+        margin-bottom: 8px;
       }
       strong {
         color: #3d9cf0;
       }
+      button {
+        background: #1e2a38;
+        color: #e8eef4;
+        border: 1px solid #334155;
+        border-radius: 6px;
+        padding: 6px 10px;
+        cursor: pointer;
+        margin-right: 6px;
+        margin-bottom: 8px;
+      }
+      button:hover {
+        background: #243447;
+      }
+      #logs {
+        max-height: 360px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        background: #0a0e12;
+        border: 1px solid #1e293b;
+        border-radius: 6px;
+        padding: 8px;
+        color: #a5f3fc;
+        font-size: 10px;
+      }
     </style>
   </head>
   <body>
-    <div><strong>1Clk v2</strong> scaffold</div>
+    <div><strong id="title">1Clk</strong></div>
     <div id="status">Checking…</div>
-    <script type="module" src="./popup.js"></script>
+    <div>
+      <button type="button" id="btnLogs">Refresh debug logs</button>
+      <button type="button" id="btnCopy">Copy logs</button>
+    </div>
+    <div id="logs">Launch Jasper once, then refresh logs here or open service worker console.</div>
+    <script src="./popup.js"></script>
   </body>
 </html>

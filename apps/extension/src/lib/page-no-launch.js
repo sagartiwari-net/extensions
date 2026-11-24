@@ -4,6 +4,7 @@
  *
  * executeScript uses a self-contained MAIN-world func (see idb-inject.js).
  */
+import { debugLog, summarizeSession } from './debug-log.js';
 import { applyPageStorageMainWorld, sessionNeedsPageStorage } from './idb-inject.js';
 
 const BUNDLE_KEY = 'oneclk_page_no_bundle';
@@ -66,17 +67,95 @@ export async function getPageNoBundle(tabId) {
   return map[String(tabId)] || null;
 }
 
+/** MAIN-world: count firebase / IDB rows after inject (self-contained). */
+function verifyIdbMainWorld() {
+  return new Promise((resolve) => {
+    if (!indexedDB?.databases) {
+      resolve({ ok: false, reason: 'no_databases_api' });
+      return;
+    }
+    indexedDB
+      .databases()
+      .then(async (dbs) => {
+        const out = { ok: true, databases: [] };
+        for (const info of dbs || []) {
+          const name = info?.name;
+          if (!name) continue;
+          try {
+            const detail = await new Promise((res) => {
+              const req = indexedDB.open(name);
+              req.onerror = () => res({ name, error: true });
+              req.onsuccess = (e) => {
+                const db = e.target.result;
+                const stores = [...db.objectStoreNames];
+                const counts = {};
+                if (!stores.length) {
+                  db.close();
+                  res({ name, stores, counts });
+                  return;
+                }
+                const tx = db.transaction(stores, 'readonly');
+                let pending = stores.length;
+                for (const s of stores) {
+                  const cReq = tx.objectStore(s).count();
+                  cReq.onsuccess = () => {
+                    counts[s] = cReq.result;
+                    pending -= 1;
+                    if (pending <= 0) {
+                      db.close();
+                      res({ name, stores, counts });
+                    }
+                  };
+                  cReq.onerror = () => {
+                    counts[s] = -1;
+                    pending -= 1;
+                    if (pending <= 0) {
+                      db.close();
+                      res({ name, stores, counts });
+                    }
+                  };
+                }
+              };
+            });
+            out.databases.push(detail);
+          } catch (e) {
+            out.databases.push({ name, error: String(e) });
+          }
+        }
+        resolve(out);
+      })
+      .catch((e) => resolve({ ok: false, reason: String(e) }));
+  });
+}
+
 export async function tryPageNoInject(tabId, url, opts = {}) {
   if (!url?.startsWith('http') || !tabId) return false;
   const pageHost = hostKey(url);
   if (!pageHost) return false;
 
   const bundle = await getPageNoBundle(tabId);
-  if (!bundle?.session) return false;
+  if (!bundle?.session) {
+    await debugLog('page_no.skip', { tabId, pageHost, reason: 'no_bundle' });
+    return false;
+  }
 
   const toolHost = bundle.host || hostKey(bundle.webUrl);
-  if (!hostsMatch(pageHost, toolHost)) return false;
-  if (await isPageNoInjected(tabId, pageHost)) return true;
+  if (!hostsMatch(pageHost, toolHost)) {
+    await debugLog('page_no.skip', { tabId, pageHost, toolHost, reason: 'host_mismatch' });
+    return false;
+  }
+  if (await isPageNoInjected(tabId, pageHost)) {
+    await debugLog('page_no.skip', { tabId, pageHost, reason: 'already_injected' });
+    return true;
+  }
+
+  await debugLog('page_no.inject_start', {
+    tabId,
+    pageHost,
+    toolHost,
+    url,
+    vault: summarizeSession(bundle.session),
+  });
 
   try {
     const results = await chrome.scripting.executeScript({
@@ -86,7 +165,21 @@ export async function tryPageNoInject(tabId, url, opts = {}) {
       args: [bundle.session],
     });
     const result = results?.[0]?.result;
-    console.log('[page_no] inject ok', pageHost, result);
+    await debugLog('page_no.inject_result', { tabId, pageHost, result });
+
+    let verify = null;
+    try {
+      const v = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: verifyIdbMainWorld,
+      });
+      verify = v?.[0]?.result;
+      await debugLog('page_no.verify_idb', { tabId, pageHost, verify });
+    } catch (verr) {
+      await debugLog('page_no.verify_fail', { tabId, pageHost, err: String(verr) });
+    }
+
     await markInjected(tabId, pageHost);
 
     // Firebase Auth reads IDB once at boot — if SPA already painted login, force one reload
@@ -96,12 +189,17 @@ export async function tryPageNoInject(tabId, url, opts = {}) {
       if (!inj[reloadKey]) {
         inj[reloadKey] = Date.now();
         await chrome.storage.session.set({ [INJECTED_KEY]: inj });
+        await debugLog('page_no.reload', { tabId, pageHost });
         await chrome.tabs.reload(tabId, { bypassCache: true }).catch(() => {});
       }
     }
     return true;
   } catch (err) {
-    console.warn('[page_no] inject failed', pageHost, err);
+    await debugLog('page_no.inject_failed', {
+      tabId,
+      pageHost,
+      err: String(err?.message || err),
+    });
     return false;
   }
 }

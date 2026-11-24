@@ -1,5 +1,6 @@
 import { CLIENT_CONFIG } from './config.gen.js';
 import { sessionLooksUsable, unwrapLaunchSession } from './lib/cookie-vault.js';
+import { debugLog, getDebugLogs, summarizeSession } from './lib/debug-log.js';
 import { clearCookiesForApexDomain, cookiesForInject } from './lib/cookies.js';
 import {
   apexFromHost,
@@ -275,7 +276,9 @@ async function processLaunch(token, askedClient) {
     throw new Error(`Wrong extension (got ${CLIENT_CONFIG.SLUG}, need ${asked})`);
   }
 
-  const integrityAction = await getIntegrityAction();
+  const integrityAction = CLIENT_CONFIG.DEBUG_SKIP_INTEGRITY
+    ? 'allow'
+    : await getIntegrityAction();
   if (integrityAction === 'block') {
     throw new Error('Integrity check failed — launch blocked. Re-register hashes in admin.');
   }
@@ -290,6 +293,12 @@ async function processLaunch(token, askedClient) {
   }
   // Vault (compress+AES) is opened on the API — extension gets plain session (fast path).
   const session = unwrapLaunchSession(data);
+  await debugLog('launch.session', {
+    tool: data.tool_name,
+    strategy: data.inject_strategy,
+    web_url: data.web_url,
+    vault: summarizeSession(session),
+  });
   if (!sessionLooksUsable(session)) {
     throw new Error('Session has no cookies/storage — check tool vault');
   }
@@ -397,12 +406,20 @@ async function processLaunch(token, askedClient) {
 
   const needsPageStorage =
     sessionNeedsPageStorage(session) || strategy === 'storage_reload' || strategy === 'idb';
+  await debugLog('launch.mode', {
+    needsPageStorage,
+    strategy,
+    transport: transport.mode,
+    cookies: cookieList.length,
+    referer: !!launchReferer,
+  });
 
   // page_no: open blank first, register vault, then navigate — inject at commit before SPA
   const tab = await chrome.tabs.create({
     url: needsPageStorage ? 'about:blank' : webUrl,
     active: true,
   });
+  await debugLog('launch.tab', { tabId: tab.id, needsPageStorage, webUrl });
   const cookieNames = cookieList.map((c) => c.name).filter(Boolean);
 
   // Mark active launch immediately so kill-switch / watchdog can attach without waiting for load.
@@ -534,7 +551,18 @@ async function processLaunch(token, askedClient) {
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'PING' || msg?.type === '__1clk_ping') {
     // Cheap liveness only — lease renew is port/alarm driven (PING used to thrash CPU)
-    sendResponse({ ok: true, slug: CLIENT_CONFIG.SLUG, api: CLIENT_CONFIG.API_BASE });
+    sendResponse({
+      ok: true,
+      slug: CLIENT_CONFIG.SLUG,
+      api: CLIENT_CONFIG.API_BASE,
+      debug: !!CLIENT_CONFIG.DEBUG,
+    });
+    return true;
+  }
+  if (msg?.type === 'DEBUG_LOGS') {
+    getDebugLogs()
+      .then((logs) => sendResponse({ ok: true, logs, debug: !!CLIENT_CONFIG.DEBUG }))
+      .catch(() => sendResponse({ ok: false, logs: [] }));
     return true;
   }
   if (msg?.type === 'IS_LAUNCH_TAB') {
