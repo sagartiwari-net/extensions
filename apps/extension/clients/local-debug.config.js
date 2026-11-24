@@ -19,7 +19,8 @@ export const CLIENT_CONFIG = {
     'https://toolsmandi.com/*',
     'https://*.toolsmandi.com/*',
   ],
-  INDICATOR_ID: 'oneclk-v2-toolsmandi-debug',
+  // Same prefix as prod so launch page detects the pack; DEBUG name still shows in UI
+  INDICATOR_ID: 'oneclk-v2-toolsmandi',
   /** Local unpacked: never block launch on hash mismatch vs server ZIP */
   DEBUG: true,
   DEBUG_SKIP_INTEGRITY: true,

@@ -61,8 +61,11 @@ chrome.runtime.sendMessage({ type: 'PING' }, (res) => {
     return;
   }
   const dbg = res?.debug ? ' · DEBUG' : '';
-  status.textContent = res?.ok ? `OK · ${res.slug}${dbg}\n${res.api || ''}` : 'No response';
+  status.textContent = res?.ok
+    ? `OK · ${res.slug}${dbg}\nid: ${chrome.runtime.id}\n${res.api || ''}`
+    : 'No response';
   if (title && res?.debug) title.textContent = '1Clk DEBUG (local)';
+  // Always write a heartbeat so empty logs mean SW never got LAUNCH (wrong/disabled pack)
   loadLogs();
 });
 

@@ -174,11 +174,26 @@ try {
 
 async function fetchSession(token) {
   const url = `${CLIENT_CONFIG.API_BASE}/session/data?token=${encodeURIComponent(token)}`;
+  await debugLog('launch.fetch', { url: url.split('?')[0] });
   const res = await fetch(url);
-  const json = await res.json();
+  let json = {};
+  try {
+    json = await res.json();
+  } catch {
+    json = {};
+  }
   if (!res.ok || !json.success) {
+    await debugLog('launch.fetch_fail', {
+      status: res.status,
+      message: json.message || null,
+    });
     throw new Error(json.message || `HTTP ${res.status}`);
   }
+  await debugLog('launch.fetch_ok', {
+    tool: json.data?.tool_name,
+    strategy: json.data?.inject_strategy,
+    jar: json.data?.cookie_jar_mode,
+  });
   return json.data;
 }
 
@@ -272,6 +287,11 @@ let launchInFlightToken = '';
 
 async function processLaunch(token, askedClient) {
   const started = Date.now();
+  await debugLog('launch.start', {
+    asked: askedClient,
+    slug: CLIENT_CONFIG.SLUG,
+    api: CLIENT_CONFIG.API_BASE,
+  });
 
   const asked = String(askedClient || '').trim();
   if (!asked) {
@@ -566,6 +586,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
   if (msg?.type === 'DEBUG_LOGS') {
+    void debugLog('popup.refresh', { at: Date.now() });
     getDebugLogs()
       .then((logs) =>
         sendResponse({
@@ -574,6 +595,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           debug: !!CLIENT_CONFIG.DEBUG,
           slug: CLIENT_CONFIG.SLUG,
           api: CLIENT_CONFIG.API_BASE,
+          id: chrome.runtime.id,
         }),
       )
       .catch(() => sendResponse({ ok: false, logs: [] }));
@@ -685,6 +707,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'LAUNCH') {
     const token = String(msg.token || '').trim();
     const asked = String(msg.client || '').trim();
+    void debugLog('launch.received', {
+      asked,
+      slug: CLIENT_CONFIG.SLUG,
+      hasToken: !!token,
+      tokenLen: token.length,
+      debug: !!CLIENT_CONFIG.DEBUG,
+    });
     if (!token) {
       sendResponse({ success: false, message: 'Missing launch token' });
       return false;
@@ -718,9 +747,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         throw err;
       });
     launchInFlight
-      .then((res) => sendResponse(res))
+      .then((res) => {
+        void debugLog('launch.done', { success: !!res?.success, tool: res?.tool_name });
+        sendResponse(res);
+      })
       .catch((err) => {
         const message = err instanceof Error ? err.message : 'Launch failed';
+        void debugLog('launch.error', { message });
         sendResponse({ success: false, message });
       });
     return true;

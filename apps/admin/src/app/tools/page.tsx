@@ -81,7 +81,7 @@ const emptyForm = (resellerId = ''): ToolForm => ({
   name: '',
   web_url: 'https://example.com/',
   inject_strategy: 'cookies',
-  cookie_jar_mode: 'auto',
+  cookie_jar_mode: 'extension_only',
   status: 'active',
   pool_id: '',
   cookie_plain: sampleCookie,
@@ -193,7 +193,7 @@ export default function ToolsPage() {
       name: tool.name,
       web_url: tool.web_url,
       inject_strategy: tool.inject_strategy || 'cookies',
-      cookie_jar_mode: tool.cookie_jar_mode || 'auto',
+      cookie_jar_mode: tool.cookie_jar_mode === 'browser' ? 'browser' : 'extension_only',
       status: tool.status || 'active',
       pool_id: tool.pool_id ? String(tool.pool_id) : '',
       cookie_plain: '',
@@ -235,16 +235,11 @@ export default function ToolsPage() {
           tool_key: form.tool_key,
           name: form.name,
           web_url: form.web_url,
-          inject_strategy: form.inject_strategy,
-          cookie_jar_mode: form.cookie_jar_mode || 'auto',
+          // inject_strategy auto: vault paste decides cookies vs idb/storage
+          inject_strategy: form.inject_strategy || 'cookies',
+          cookie_jar_mode: form.cookie_jar_mode === 'browser' ? 'browser' : 'extension_only',
           status: form.status,
           cookie_plain: form.cookie_plain?.trim() || undefined,
-          cookie_formats:
-            form.inject_strategy === 'idb'
-              ? ['indexedDB', 'localStorage', 'sessionStorage', 'cookies']
-              : form.inject_strategy === 'storage_reload'
-                ? ['cookies', 'localStorage', 'sessionStorage']
-                : ['cookies'],
         }),
       });
       setShowCreate(false);
@@ -268,15 +263,9 @@ export default function ToolsPage() {
         tool_key: form.tool_key,
         name: form.name,
         web_url: form.web_url,
-        inject_strategy: form.inject_strategy,
-        cookie_jar_mode: form.cookie_jar_mode || 'auto',
+        inject_strategy: form.inject_strategy || 'cookies',
+        cookie_jar_mode: form.cookie_jar_mode === 'browser' ? 'browser' : 'extension_only',
         status: form.status,
-        cookie_formats:
-          form.inject_strategy === 'idb'
-            ? ['indexedDB', 'localStorage', 'sessionStorage', 'cookies']
-            : form.inject_strategy === 'storage_reload'
-              ? ['cookies', 'localStorage', 'sessionStorage']
-              : ['cookies'],
       };
       if (form.cookie_plain.trim()) {
         body.cookie_plain = form.cookie_plain.trim();
@@ -517,34 +506,25 @@ export default function ToolsPage() {
             />
           </div>
           <div className="flex flex-col gap-2">
-            <Label>Inject mode</Label>
-            <select
-              className="h-8 rounded-lg border border-input bg-background px-2.5 text-sm"
-              value={form.inject_strategy}
-              onChange={(e) => setForm({ ...form, inject_strategy: e.target.value })}
-            >
-              <option value="cookies">Cookies only</option>
-              <option value="storage_reload">Cookies + localStorage</option>
-              <option value="idb">IndexedDB / page storage (Jasper, Quillbot)</option>
-            </select>
-            <p className="text-xs text-muted-foreground">
-              Jasper / Quillbot = IndexedDB. Grammarly-style LS = Cookies + localStorage. Most SEO
-              tools = Cookies only.
-            </p>
-          </div>
-          <div className="flex flex-col gap-2">
             <Label>Save cookies in browser</Label>
             <select
               className="h-8 rounded-lg border border-input bg-background px-2.5 text-sm"
-              value={form.cookie_jar_mode || 'auto'}
+              value={
+                form.cookie_jar_mode === 'browser'
+                  ? 'browser'
+                  : form.cookie_jar_mode === 'extension_only'
+                    ? 'extension_only'
+                    : 'extension_only'
+              }
               onChange={(e) => setForm({ ...form, cookie_jar_mode: e.target.value })}
             >
-              <option value="auto">Auto (detect)</option>
-              <option value="browser">Yes — browser jar (Grammarly style, clear on disable)</option>
-              <option value="extension_only">No — extension only (Semrush / DNR)</option>
+              <option value="browser">Yes — browser jar (Grammarly; clear when extension off)</option>
+              <option value="extension_only">No — extension only (Semrush / ChatGPT style)</option>
             </select>
             <p className="text-xs text-muted-foreground">
-              Yes = chrome.cookies jar. No = Cookie header via extension only (no site jar leak).
+              Yes = write cookies into Chrome (site can see them). No = cookies stay in extension
+              (DNR header only). IndexedDB/localStorage tools (Jasper) always inject into the page
+              via JS — this toggle only affects HTTP cookies.
             </p>
           </div>
           <div className="flex flex-col gap-2">

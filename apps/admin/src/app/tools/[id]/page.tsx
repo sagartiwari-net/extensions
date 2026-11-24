@@ -324,31 +324,24 @@ export default function ToolDetailPage() {
                       required
                     />
                   </div>
-                  <div className="flex flex-col gap-2">
-                    <Label>Strategy</Label>
-                    <select
-                      name="inject_strategy"
-                      className="h-8 rounded-lg border border-input bg-background px-2.5 text-sm"
-                      defaultValue={tool.inject_strategy}
-                      key={`strat-${tool.inject_strategy}`}
-                    >
-                      <option value="cookies">cookies</option>
-                      <option value="storage_reload">storage_reload (LS/SS)</option>
-                      <option value="idb">idb (IndexedDB / Jasper)</option>
-                    </select>
-                  </div>
-                  <div className="flex flex-col gap-2">
+                  <div className="flex flex-col gap-2 sm:col-span-2">
                     <Label>Save cookies in browser</Label>
                     <select
                       name="cookie_jar_mode"
                       className="h-8 rounded-lg border border-input bg-background px-2.5 text-sm"
-                      defaultValue={tool.cookie_jar_mode || 'auto'}
-                      key={`jar-${tool.cookie_jar_mode || 'auto'}`}
+                      defaultValue={
+                        tool.cookie_jar_mode === 'browser' ? 'browser' : 'extension_only'
+                      }
+                      key={`jar-${tool.cookie_jar_mode || 'extension_only'}`}
                     >
-                      <option value="auto">Auto</option>
-                      <option value="browser">Yes — browser jar</option>
-                      <option value="extension_only">No — extension only</option>
+                      <option value="browser">Yes — browser jar (Grammarly)</option>
+                      <option value="extension_only">No — extension only (Semrush / ChatGPT)</option>
                     </select>
+                    <p className="text-xs text-muted-foreground">
+                      Vault type (cookies vs IndexedDB) is detected from the paste. This only
+                      controls whether HTTP cookies go into Chrome&apos;s cookie jar.
+                    </p>
+                    <input type="hidden" name="inject_strategy" value={tool.inject_strategy || 'cookies'} />
                   </div>
                   <div className="flex flex-col gap-2">
                     <Label>Status</Label>
