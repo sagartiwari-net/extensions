@@ -15,6 +15,7 @@ const COMPRESS_MAGIC = COOKIE_VAULT_MAGIC;
 /**
  * Strip JSON whitespace before compress — smaller ciphertext, same data.
  * Cookie-Editor often exports a bare array — wrap as { cookies: [...] }.
+ * Objects with referer / indexedDB / localStorage are preserved as-is.
  */
 function minifyCookiePlain(plain: string): string {
   const trimmed = plain.trim();
@@ -22,7 +23,12 @@ function minifyCookiePlain(plain: string): string {
   try {
     const parsed = JSON.parse(trimmed) as unknown;
     if (Array.isArray(parsed)) {
-      return JSON.stringify({ cookies: parsed, localStorage: {}, sessionStorage: {} });
+      return JSON.stringify({
+        cookies: parsed,
+        localStorage: {},
+        sessionStorage: {},
+        includedFormats: ['cookies'],
+      });
     }
     return JSON.stringify(parsed);
   } catch {

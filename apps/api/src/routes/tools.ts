@@ -16,6 +16,11 @@ import {
   nextUniqueToolKey,
 } from '../lib/tool-key.js';
 import { parseBrandSettings } from '../lib/extension-packager.js';
+import {
+  normalizeVault,
+  normalizeVaultPlain,
+  vaultLooksUsable,
+} from '../lib/vault-normalize.js';
 
 async function existingKeysForReseller(
   resellerId: number,
@@ -317,10 +322,34 @@ export const toolRoutes: FastifyPluginAsync = async (app) => {
       const toolKey = nextUniqueToolKey(baseKey, existing);
       const password = body.cookie_password || randomBytes(12).toString('hex');
       let payload: string | null = null;
+      let formatsList = body.cookie_formats ?? ['cookies'];
+      let injectStrategy = body.inject_strategy;
       if (body.cookie_plain?.trim()) {
-        payload = encryptCookieData(body.cookie_plain.trim(), password);
+        const refererOverride =
+          typeof body.referer === 'string' && body.referer.trim() ? body.referer.trim() : null;
+        const normalizedPlain = normalizeVaultPlain(body.cookie_plain.trim(), refererOverride);
+        const vault = normalizeVault(JSON.parse(normalizedPlain));
+        if (!vaultLooksUsable(vault)) {
+          return reply.code(400).send({
+            success: false,
+            message:
+              'Vault empty — paste Cookie-Editor array, {"cookies":[...]}, or localStorage/sessionStorage/indexedDB JSON',
+          });
+        }
+        payload = encryptCookieData(normalizedPlain, password);
+        if (!body.cookie_formats) {
+          formatsList = vault.includedFormats as typeof formatsList;
+        }
+        if (
+          !body.inject_strategy &&
+          (vault.indexedDB ||
+            Object.keys(vault.localStorage).length > 0 ||
+            Object.keys(vault.sessionStorage).length > 0)
+        ) {
+          injectStrategy = vault.indexedDB ? 'idb' : 'storage_reload';
+        }
       }
-      const formats = JSON.stringify(body.cookie_formats ?? ['cookies']);
+      const formats = JSON.stringify(formatsList);
       const [res] = await pool.query<ResultSetHeader>(
         `INSERT INTO tools
           (reseller_id, tool_key, name, web_url, status, inject_strategy, cookie_formats,
@@ -332,7 +361,7 @@ export const toolRoutes: FastifyPluginAsync = async (app) => {
           body.name,
           body.web_url,
           body.status ?? 'active',
-          body.inject_strategy,
+          injectStrategy,
           formats,
           payload,
           password,
@@ -385,7 +414,33 @@ export const toolRoutes: FastifyPluginAsync = async (app) => {
       }
       if (body.cookie_plain?.trim()) {
         const password = body.cookie_password || tool.cookie_password || randomBytes(12).toString('hex');
-        const cipher = encryptCookieData(body.cookie_plain.trim(), password);
+        const refererOverride =
+          typeof body.referer === 'string' && body.referer.trim() ? body.referer.trim() : null;
+        const normalizedPlain = normalizeVaultPlain(body.cookie_plain.trim(), refererOverride);
+        const vault = normalizeVault(JSON.parse(normalizedPlain));
+        if (!vaultLooksUsable(vault)) {
+          return reply.code(400).send({
+            success: false,
+            message:
+              'Vault empty — paste Cookie-Editor array, {"cookies":[...]}, or localStorage/sessionStorage/indexedDB JSON',
+          });
+        }
+        const cipher = encryptCookieData(normalizedPlain, password);
+        // Auto-tag formats from paste so admin UI / launch know what's inside
+        if (!body.cookie_formats) {
+          fields.push('cookie_formats = ?');
+          vals.push(JSON.stringify(vault.includedFormats));
+        }
+        // Prefer storage/idb strategy when vault has page storage
+        if (
+          !body.inject_strategy &&
+          (vault.indexedDB ||
+            Object.keys(vault.localStorage).length > 0 ||
+            Object.keys(vault.sessionStorage).length > 0)
+        ) {
+          fields.push('inject_strategy = ?');
+          vals.push(vault.indexedDB ? 'idb' : 'storage_reload');
+        }
 
         if (tool.pool_id) {
           // Bi-directional: any linked tool save updates the whole pool

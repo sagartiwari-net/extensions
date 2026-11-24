@@ -2,6 +2,11 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { ResultSetHeader, RowDataPacket } from 'mysql2';
 import { randomBytes } from 'node:crypto';
 import { encryptCookieData, sha256Hex } from '@oneclk/crypto';
+import {
+  normalizeVault,
+  normalizeVaultPlain,
+  vaultLooksUsable,
+} from '../lib/vault-normalize.js';
 import { z } from 'zod';
 import { pool } from '../db.js';
 import { sendErr, requireMaster, scopedResellerId } from '../authz.js';
@@ -360,7 +365,16 @@ export const poolRoutes: FastifyPluginAsync = async (app) => {
         )[0][0]?.cookie_password ||
         cryptoRandom();
 
-      const cipher = encryptCookieData(body.cookie_plain.trim(), password);
+      const normalizedPlain = normalizeVaultPlain(body.cookie_plain.trim());
+      const vault = normalizeVault(JSON.parse(normalizedPlain));
+      if (!vaultLooksUsable(vault)) {
+        return reply.code(400).send({
+          success: false,
+          message:
+            'Vault empty — paste Cookie-Editor array, {"cookies":[...]}, or localStorage/sessionStorage/indexedDB JSON',
+        });
+      }
+      const cipher = encryptCookieData(normalizedPlain, password);
       await pool.query(
         `UPDATE cookie_sync_pools
          SET cookie_payload = ?, cookie_password = ?, payload_sha256 = ?,

@@ -74,6 +74,14 @@ export const createToolSchema = z.object({
     .default(1),
   cookie_password: z.string().min(1).max(255).optional(),
   cookie_plain: z.string().optional(),
+  /** Optional Referer applied when saving vault (merged into cookie JSON). */
+  referer: z
+    .string()
+    .max(500)
+    .optional()
+    .refine((v) => !v || v === '' || /^https?:\/\//i.test(v), {
+      message: 'referer must be empty or an http(s) URL',
+    }),
   cookie_formats: z.array(z.enum(COOKIE_FORMATS)).optional(),
   status: z.enum(['active', 'updating', 'disabled']).optional(),
 });

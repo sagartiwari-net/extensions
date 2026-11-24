@@ -48,6 +48,7 @@ export default function ToolDetailPage() {
   const [pickProxy, setPickProxy] = useState('');
   const [pickUa, setPickUa] = useState('');
   const [cookiePlain, setCookiePlain] = useState('');
+  const [referer, setReferer] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -83,12 +84,15 @@ export default function ToolDetailPage() {
     try {
       const res = await api<{ synced_via_pool?: number }>(`/api/tools/${id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ cookie_plain: cookiePlain }),
+        body: JSON.stringify({
+          cookie_plain: cookiePlain,
+          ...(referer.trim() ? { referer: referer.trim() } : {}),
+        }),
       });
       setMessage(
         res.synced_via_pool
           ? `Cookie saved — synced to pool #${res.synced_via_pool}`
-          : 'Cookie saved (encrypted)',
+          : 'Cookie / storage vault saved (encrypted)',
       );
       setCookiePlain('');
       load();
@@ -348,23 +352,40 @@ export default function ToolDetailPage() {
         <TabsContent value="cookie" className="mt-4">
           <Card>
             <CardHeader>
-              <CardTitle>Cookie vault</CardTitle>
+              <CardTitle>Cookie / storage vault</CardTitle>
               <CardDescription>
-                Paste Cookie-Editor JSON — either {'{"cookies":[...]}'} or a bare cookie array{' '}
-                {'[{...}]'}. Server normalizes and encrypts.
+                Paste any of: bare Cookie-Editor array <code>[{'{'}…{'}'}]</code>, object with{' '}
+                <code>cookies</code> + optional <code>referer</code>, or{' '}
+                <code>localStorage</code> / <code>sessionStorage</code> / <code>indexedDB</code>{' '}
+                (Jasper-style). Server normalizes and encrypts.
               </CardDescription>
             </CardHeader>
             <CardContent>
               <form className="flex flex-col gap-4" onSubmit={saveCookie}>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="vault-referer">Referer (optional)</Label>
+                  <input
+                    id="vault-referer"
+                    type="url"
+                    value={referer}
+                    onChange={(e) => setReferer(e.target.value)}
+                    placeholder="https://www.semrush.com/home/"
+                    className="h-9 rounded-lg border border-input bg-background px-3 text-sm"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    If the paste already has <code>referer</code>, leave this empty. Use this when
+                    pasting a bare cookie array but the tool checks Referer.
+                  </p>
+                </div>
                 <Textarea
                   value={cookiePlain}
                   onChange={(e) => setCookiePlain(e.target.value)}
-                  placeholder='{"cookies":[...],"localStorage":{}}'
+                  placeholder='[{...}]  or  {"cookies":[...],"referer":"https://..."}  or  {"indexedDB":{...}}'
                   className="h-48 max-h-72 min-h-40 overflow-auto font-mono text-xs leading-relaxed"
                   required
                 />
                 <Button type="submit" disabled={busy}>
-                  {busy ? 'Saving…' : 'Save cookie'}
+                  {busy ? 'Saving…' : 'Save vault'}
                 </Button>
               </form>
             </CardContent>

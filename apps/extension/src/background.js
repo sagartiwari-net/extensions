@@ -9,6 +9,8 @@ import {
   setupExtensionOnlyCookieSession,
   setupSetCookieStrip,
 } from './lib/dnr-cookies.js';
+import { applyPageStorageMainWorld, sessionNeedsPageStorage } from './lib/idb-inject.js';
+import { applyLaunchReferer, clearLaunchRefererRule } from './lib/referer-dnr.js';
 import { startExtensionEnforcement, syncAndEnforceExtensions } from './lib/enforcement.js';
 import { checkIntegrity, getIntegrityAction, startIntegrityWatch } from './lib/integrity.js';
 import {
@@ -325,6 +327,7 @@ async function processLaunch(token, askedClient) {
   const cookieList = cookiesForInject(session.cookies || session.Cookies || []);
   const transport = resolveCookieTransport(session, webUrl);
   await clearDnrCookieSession().catch(() => {});
+  await clearLaunchRefererRule().catch(() => {});
 
   // Always wipe leftover jar auth for this apex + related (ChatGPT↔OpenAI).
   try {
@@ -375,6 +378,13 @@ async function processLaunch(token, askedClient) {
     }
   }
 
+  // Tools that check Referer (paste referer or panel override in vault)
+  const launchReferer =
+    (typeof session.referer === 'string' && session.referer) ||
+    (typeof session.referrer === 'string' && session.referrer) ||
+    null;
+  await applyLaunchReferer(webUrl, launchReferer).catch(() => {});
+
   const tab = await chrome.tabs.create({ url: webUrl, active: true });
   const cookieNames = cookieList.map((c) => c.name).filter(Boolean);
 
@@ -419,56 +429,22 @@ async function processLaunch(token, askedClient) {
         await injectPageWatchdog(tab.id, webUrl, cookieNames);
       }
 
-      if (strategy === 'storage_reload' && tab.id) {
+      // LS / SS / indexedDB (Jasper Firebase, etc.) — content-driven, not only strategy flag
+      const needsPageStorage =
+        sessionNeedsPageStorage(session) ||
+        strategy === 'storage_reload' ||
+        strategy === 'idb';
+      if (needsPageStorage && tab.id) {
         await chrome.scripting
           .executeScript({
             target: { tabId: tab.id },
             world: 'MAIN',
-            func: (sess, launchUrl) => {
-              const nested = sess.storage || {};
-              const ls =
-                sess.localStorage ||
-                sess.LocalStorage ||
-                nested.localStorage ||
-                nested.LocalStorage ||
-                {};
-              const ss =
-                sess.sessionStorage ||
-                sess.SessionStorage ||
-                nested.sessionStorage ||
-                nested.SessionStorage ||
-                {};
-              try {
-                localStorage.clear();
-              } catch {}
-              try {
-                sessionStorage.clear();
-              } catch {}
-              for (const [k, v] of Object.entries(ls || {})) {
-                try {
-                  localStorage.setItem(k, typeof v === 'string' ? v : JSON.stringify(v));
-                } catch {}
-              }
-              for (const [k, v] of Object.entries(ss || {})) {
-                try {
-                  sessionStorage.setItem(k, typeof v === 'string' ? v : JSON.stringify(v));
-                } catch {}
-              }
-              try {
-                sessionStorage.setItem('__1clk_launch_tab', '1');
-                sessionStorage.setItem('__1clk_was_launch', '1');
-                sessionStorage.setItem('__1clk_launch_url', launchUrl);
-              } catch {}
-            },
-            args: [session, webUrl],
+            func: applyPageStorageMainWorld,
+            args: [session, { reload: true }],
           })
-          .catch(() => {});
-        try {
-          await chrome.tabs.reload(tab.id, { bypassCache: true });
-          await waitForTabComplete(tab.id, 45000).catch(() => {});
-        } catch {
-          /* */
-        }
+          .catch((err) => console.warn('[1clk-v2] page storage inject failed', err));
+        // applyPageStorageMainWorld reloads; wait for that navigation
+        await waitForTabComplete(tab.id, 45000).catch(() => {});
         if (transport.writeJar) {
           await syncJarCookiesForUrl(session, webUrl, webUrl, leaseSeconds).catch(() => {});
         }
@@ -560,6 +536,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .then(() => wipeDurableLaunchCookies())
       .then(() => (url ? emergencyWipeByUrl(url) : Promise.resolve()))
       .then(() => clearDnrCookieSession())
+      .then(() => clearLaunchRefererRule())
       .then(() => chrome.storage.session.remove(ACTIVE_LAUNCH_KEY))
       .then(() => purgeAllLaunchCleanups({ blankTabs: true }))
       .then(() => sendResponse({ ok: true }))

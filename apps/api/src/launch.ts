@@ -5,40 +5,11 @@ import { pool } from './db.js';
 import { env } from './env.js';
 import { loadLaunchRules } from './launch-rules.js';
 import { parseBrandSettings } from './lib/extension-packager.js';
+import { normalizeVault, vaultLooksUsable } from './lib/vault-normalize.js';
 
-/** Flatten DigitaVision / old vault shapes: storage.localStorage → localStorage */
+/** Flatten DigitaVision / Cookie-Editor vault shapes for launch. */
 export function normalizeSession(raw: unknown): Record<string, unknown> {
-  // Cookie-Editor export is often a bare array of cookie objects
-  if (Array.isArray(raw)) {
-    return { cookies: raw, localStorage: {}, sessionStorage: {} };
-  }
-  if (!raw || typeof raw !== 'object') {
-    return { cookies: [], localStorage: {}, sessionStorage: {} };
-  }
-  const obj = raw as Record<string, unknown>;
-  const nested =
-    obj.storage && typeof obj.storage === 'object'
-      ? (obj.storage as Record<string, unknown>)
-      : {};
-  const localStorage =
-    (obj.localStorage as Record<string, unknown> | null) ||
-    (obj.LocalStorage as Record<string, unknown> | null) ||
-    (nested.localStorage as Record<string, unknown> | null) ||
-    (nested.LocalStorage as Record<string, unknown> | null) ||
-    {};
-  const sessionStorage =
-    (obj.sessionStorage as Record<string, unknown> | null) ||
-    (obj.SessionStorage as Record<string, unknown> | null) ||
-    (nested.sessionStorage as Record<string, unknown> | null) ||
-    (nested.SessionStorage as Record<string, unknown> | null) ||
-    {};
-  const cookies = (obj.cookies || obj.Cookies || []) as unknown[];
-  return {
-    ...obj,
-    cookies: Array.isArray(cookies) ? cookies : [],
-    localStorage: localStorage && typeof localStorage === 'object' ? localStorage : {},
-    sessionStorage: sessionStorage && typeof sessionStorage === 'object' ? sessionStorage : {},
-  };
+  return normalizeVault(raw).raw;
 }
 
 export async function createLaunchToken(input: {
@@ -226,27 +197,20 @@ export async function consumeSessionToken(token: string) {
   let session: Record<string, unknown>;
   try {
     const plain = decryptCookieData(cipher, password);
-    session = normalizeSession(JSON.parse(plain) as unknown);
-  } catch {
-    const err = new Error('Cookie decrypt failed') as Error & { statusCode: number };
-    err.statusCode = 500;
-    throw err;
-  }
-
-  // Empty vault must not burn the one-time token
-  const cookies = session.cookies || session.Cookies;
-  const ls = session.localStorage || session.LocalStorage;
-  const ss = session.sessionStorage || session.SessionStorage;
-  const usable =
-    (Array.isArray(cookies) && cookies.length > 0) ||
-    (ls && typeof ls === 'object' && Object.keys(ls as object).length > 0) ||
-    (ss && typeof ss === 'object' && Object.keys(ss as object).length > 0);
-  if (!usable) {
-    const err = new Error(
-      'Session has no cookies/storage — check tool vault (paste Cookie-Editor JSON or {"cookies":[...]})',
-    ) as Error & { statusCode: number };
-    err.statusCode = 400;
-    throw err;
+    const vault = normalizeVault(JSON.parse(plain) as unknown);
+    if (!vaultLooksUsable(vault)) {
+      const err = new Error(
+        'Session has no cookies/storage/indexedDB — paste Cookie-Editor array, {"cookies":[...]}, or indexedDB/localStorage vault',
+      ) as Error & { statusCode: number };
+      err.statusCode = 400;
+      throw err;
+    }
+    session = vault.raw;
+  } catch (err) {
+    if ((err as { statusCode?: number }).statusCode === 400) throw err;
+    const e = new Error('Cookie decrypt failed') as Error & { statusCode: number };
+    e.statusCode = 500;
+    throw e;
   }
 
   // Atomic claim — only after vault is ready + usable
