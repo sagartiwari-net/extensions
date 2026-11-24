@@ -3,7 +3,7 @@
  *
  * Security (no long window):
  *   chrome.runtime.connect port dies the instant extension is disabled →
- *   stop beats immediately → MAIN watchdog blanks in ~2s + EMERGENCY wipe.
+ *   stop beats immediately → MAIN watchdog wipes then blanks (~12s dead timeout).
  *
  * Performance (no client CPU melt):
  *   - Idle on normal websites (no 50× boot retry storm)
@@ -114,17 +114,28 @@ import { pageWatchdogSource } from './page-watchdog.js';
     }
   }
 
+  function extPingUrl() {
+    try {
+      // web_accessible ping — MAIN world can fetch; fails when extension disabled
+      return chrome.runtime.getURL('ping.txt');
+    } catch {
+      return '';
+    }
+  }
+
   /** Inject MAIN watchdog once — re-inject on every beat was melting CPU. */
   function injectMainWatchdog(url, force = false) {
     if (watchdogInjected && !force) return;
     watchdogInjected = true;
     const targetUrl = url || location.href;
+    const ping = extPingUrl();
     try {
       chrome.runtime.sendMessage(
         {
           type: 'ENSURE_WATCHDOG',
           url: targetUrl,
           cookieNames: cookieNames || [],
+          extPingUrl: ping,
         },
         () => void chrome.runtime.lastError,
       );
@@ -135,7 +146,7 @@ import { pageWatchdogSource } from './page-watchdog.js';
       const s = document.createElement('script');
       s.textContent = `(${watchdogSrc})(${JSON.stringify(targetUrl)}, ${JSON.stringify(
         cookieNames || [],
-      )});`;
+      )}, ${JSON.stringify(ping)});`;
       (document.documentElement || document.head || document.body).appendChild(s);
       s.remove();
     } catch {
@@ -146,7 +157,7 @@ import { pageWatchdogSource } from './page-watchdog.js';
   function postBeat() {
     if (killing || !activated) return;
     try {
-      window.postMessage({ type: '__1clk_beat', t: Date.now() }, '*');
+      window.postMessage({ type: '__1clk_beat', t: Date.now(), ping: extPingUrl() }, '*');
     } catch {
       /* */
     }
@@ -188,11 +199,40 @@ import { pageWatchdogSource } from './page-watchdog.js';
       /* */
     }
     try {
-      const parts = document.cookie.split(';');
-      for (const part of parts) {
-        const name = (part.split('=')[0] || '').trim();
-        if (!name) continue;
-        document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;Max-Age=0`;
+      const apex = pageApex();
+      const names = new Set(
+        (cookieNames || []).concat([
+          'grauth',
+          'gac',
+          'csrf-token',
+          'isGrammarlyUser',
+          'last_authn_event',
+          'gnar_containerId',
+          APEX_COOKIE,
+        ]),
+      );
+      try {
+        for (const part of document.cookie.split(';')) {
+          const name = (part.split('=')[0] || '').trim();
+          if (name) names.add(name);
+        }
+      } catch {
+        /* */
+      }
+      const domains = [null, location.hostname, `.${location.hostname}`];
+      if (apex) domains.push(apex, `.${apex}`);
+      for (const name of names) {
+        for (const path of ['/', location.pathname || '/']) {
+          for (const domain of domains) {
+            let s = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=${path};Max-Age=0`;
+            if (domain) s += `;domain=${domain}`;
+            try {
+              document.cookie = s;
+            } catch {
+              /* */
+            }
+          }
+        }
       }
     } catch {
       /* */
@@ -202,6 +242,24 @@ import { pageWatchdogSource } from './page-watchdog.js';
       sessionStorage.removeItem(WAS_LAUNCH);
       sessionStorage.removeItem(LAUNCH_URL);
       sessionStorage.clear();
+    } catch {
+      /* */
+    }
+    // Jasper / Firebase — kick IDB deletes while still on origin (before about:blank)
+    try {
+      indexedDB.deleteDatabase('firebaseLocalStorageDb');
+      indexedDB.deleteDatabase('firebase-heartbeat-database');
+      if (indexedDB.databases) {
+        indexedDB.databases().then((dbs) => {
+          (dbs || []).forEach((db) => {
+            try {
+              if (db?.name) indexedDB.deleteDatabase(db.name);
+            } catch {
+              /* */
+            }
+          });
+        });
+      }
     } catch {
       /* */
     }
@@ -216,7 +274,7 @@ import { pageWatchdogSource } from './page-watchdog.js';
       clearInterval(backupTimer);
       backupTimer = null;
     }
-    // Stop beats NOW → MAIN watchdog blanks; also blank from ISOLATED (ChatGPT hung on CSRF)
+    // Wipe on origin FIRST — blanking cancels IDB clears (Jasper/Grammarly stay logged in)
     requestBackgroundCleanup();
     wipePageData();
     const goBlank = () => {
@@ -235,9 +293,9 @@ import { pageWatchdogSource } from './page-watchdog.js';
         }
       }
     };
-    goBlank();
-    setTimeout(goBlank, 200);
-    setTimeout(goBlank, 800);
+    setTimeout(goBlank, 120);
+    setTimeout(goBlank, 500);
+    setTimeout(goBlank, 1500);
   }
 
   function onExtensionGone() {
@@ -272,51 +330,32 @@ import { pageWatchdogSource } from './page-watchdog.js';
 
   function backupPing() {
     if (killing || !activated) return;
+    // Only kill when extension is actually gone — never on slow SW / failed PING
     if (!extensionAlive()) {
       onExtensionGone();
       return;
     }
     try {
       chrome.runtime.sendMessage({ type: 'PING' }, (resp) => {
-        if (chrome.runtime.lastError || !resp?.ok) {
-          swallowLastError();
-          // One more check — avoid false kill on transient SW wake
-          setTimeout(() => {
-            if (killing || !activated) return;
-            if (!extensionAlive()) {
-              onExtensionGone();
-              return;
-            }
-            try {
-              chrome.runtime.sendMessage({ type: 'PING' }, (r2) => {
-                if (chrome.runtime.lastError || !r2?.ok) {
-                  swallowLastError();
-                  onExtensionGone();
-                } else {
-                  connectPort();
-                  try {
-                    port?.postMessage({ type: 'RENEW_LEASE' });
-                  } catch {
-                    /* */
-                  }
-                }
-              });
-            } catch {
-              onExtensionGone();
-            }
-          }, 400);
+        swallowLastError();
+        if (!extensionAlive()) {
+          onExtensionGone();
           return;
         }
-        connectPort();
-        // Grammarly jar lease — rare nudge (debounced in SW); disable kill stays port-driven
-        try {
-          port?.postMessage({ type: 'RENEW_LEASE' });
-        } catch {
-          /* */
+        if (resp?.ok) {
+          connectPort();
+          try {
+            port?.postMessage({ type: 'RENEW_LEASE' });
+          } catch {
+            /* */
+          }
+        } else {
+          // Transient SW sleep — reconnect, do NOT blank the page
+          connectPort();
         }
       });
     } catch {
-      onExtensionGone();
+      if (!extensionAlive()) onExtensionGone();
     }
   }
 

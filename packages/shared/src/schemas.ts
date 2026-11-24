@@ -66,8 +66,9 @@ export const createToolSchema = z.object({
     .regex(/^[a-z0-9][a-z0-9_-]*$/i),
   name: z.string().trim().min(1).max(255),
   web_url: z.string().url().max(500),
-  inject_strategy: z.enum(INJECT_STRATEGIES).default('cookies'),
-  /** Where HTTP cookies live: browser jar (Grammarly) vs extension DNR only (Semrush). */
+  /** Optional label — when vault is pasted, server derives this from formats (cookies/LS/IDB). */
+  inject_strategy: z.enum(INJECT_STRATEGIES).optional().default('cookies'),
+  /** Where HTTP cookies live: auto detect | browser jar | extension DNR only. */
   cookie_jar_mode: z.enum(['auto', 'browser', 'extension_only']).default('auto'),
   security_tier: z
     .number()

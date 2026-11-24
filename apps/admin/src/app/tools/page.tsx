@@ -37,6 +37,7 @@ type Tool = {
   status: string;
   inject_strategy: string;
   cookie_jar_mode?: string;
+  cookie_formats?: string[];
   has_cookie: number;
   pool_id: number | null;
 };
@@ -81,7 +82,7 @@ const emptyForm = (resellerId = ''): ToolForm => ({
   name: '',
   web_url: 'https://example.com/',
   inject_strategy: 'cookies',
-  cookie_jar_mode: 'extension_only',
+  cookie_jar_mode: 'auto',
   status: 'active',
   pool_id: '',
   cookie_plain: sampleCookie,
@@ -193,7 +194,10 @@ export default function ToolsPage() {
       name: tool.name,
       web_url: tool.web_url,
       inject_strategy: tool.inject_strategy || 'cookies',
-      cookie_jar_mode: tool.cookie_jar_mode === 'browser' ? 'browser' : 'extension_only',
+      cookie_jar_mode:
+        tool.cookie_jar_mode === 'browser' || tool.cookie_jar_mode === 'extension_only'
+          ? tool.cookie_jar_mode
+          : 'auto',
       status: tool.status || 'active',
       pool_id: tool.pool_id ? String(tool.pool_id) : '',
       cookie_plain: '',
@@ -235,9 +239,7 @@ export default function ToolsPage() {
           tool_key: form.tool_key,
           name: form.name,
           web_url: form.web_url,
-          // inject_strategy auto: vault paste decides cookies vs idb/storage
-          inject_strategy: form.inject_strategy || 'cookies',
-          cookie_jar_mode: form.cookie_jar_mode === 'browser' ? 'browser' : 'extension_only',
+          cookie_jar_mode: form.cookie_jar_mode || 'auto',
           status: form.status,
           cookie_plain: form.cookie_plain?.trim() || undefined,
         }),
@@ -263,8 +265,7 @@ export default function ToolsPage() {
         tool_key: form.tool_key,
         name: form.name,
         web_url: form.web_url,
-        inject_strategy: form.inject_strategy || 'cookies',
-        cookie_jar_mode: form.cookie_jar_mode === 'browser' ? 'browser' : 'extension_only',
+        cookie_jar_mode: form.cookie_jar_mode || 'auto',
         status: form.status,
       };
       if (form.cookie_plain.trim()) {
@@ -364,10 +365,20 @@ export default function ToolsPage() {
       sortValue: (row) => row.tool_key,
     },
     {
-      id: 'strategy',
-      header: 'Strategy',
-      cell: (row) => row.inject_strategy,
-      sortValue: (row) => row.inject_strategy,
+      id: 'formats',
+      header: 'Vault',
+      cell: (row) =>
+        Array.isArray(row.cookie_formats) && row.cookie_formats.length
+          ? row.cookie_formats.join('+')
+          : row.inject_strategy || '—',
+      sortValue: (row) =>
+        Array.isArray(row.cookie_formats) ? row.cookie_formats.join('+') : row.inject_strategy,
+    },
+    {
+      id: 'jar',
+      header: 'Browser jar',
+      cell: (row) => row.cookie_jar_mode || 'auto',
+      sortValue: (row) => row.cookie_jar_mode || 'auto',
     },
     {
       id: 'cookie',
@@ -510,21 +521,20 @@ export default function ToolsPage() {
             <select
               className="h-8 rounded-lg border border-input bg-background px-2.5 text-sm"
               value={
-                form.cookie_jar_mode === 'browser'
-                  ? 'browser'
-                  : form.cookie_jar_mode === 'extension_only'
-                    ? 'extension_only'
-                    : 'extension_only'
+                form.cookie_jar_mode === 'browser' || form.cookie_jar_mode === 'extension_only'
+                  ? form.cookie_jar_mode
+                  : 'auto'
               }
               onChange={(e) => setForm({ ...form, cookie_jar_mode: e.target.value })}
             >
-              <option value="browser">Yes — browser jar (Grammarly; clear when extension off)</option>
-              <option value="extension_only">No — extension only (Semrush / ChatGPT style)</option>
+              <option value="auto">Auto — detect (Grammarly/Canva → jar, ChatGPT → extension)</option>
+              <option value="browser">Yes — browser jar (clear when extension off)</option>
+              <option value="extension_only">No — extension only (DNR header; no jar leak)</option>
             </select>
             <p className="text-xs text-muted-foreground">
-              Yes = write cookies into Chrome (site can see them). No = cookies stay in extension
-              (DNR header only). IndexedDB/localStorage tools (Jasper) always inject into the page
-              via JS — this toggle only affects HTTP cookies.
+              Vault paste auto-detects cookies / localStorage / sessionStorage / IndexedDB and
+              injects whatever is present (can be multiple). This toggle only controls where HTTP
+              cookies live (Chrome jar vs extension DNR).
             </p>
           </div>
           <div className="flex flex-col gap-2">

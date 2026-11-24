@@ -69,18 +69,19 @@ import {
 } from './lib/session-cleanup.js';
 import { applyUserAgent } from './lib/ua-apply.js';
 
-async function injectPageWatchdog(tabId, launchUrl, cookieNames = []) {
+async function injectPageWatchdog(tabId, launchUrl, cookieNames = [], extPingUrl = '') {
   if (!tabId) return;
   // ISOLATED markers first — kill-switch content script cannot see MAIN sessionStorage
   await markLaunchTabIsolated(tabId, launchUrl);
   await chrome.storage.local.set({ oneclk_active_cookie_names: cookieNames || [] });
+  const ping = extPingUrl || chrome.runtime.getURL('ping.txt');
   // Pass watchdog source as arg — pageWatchdogMainWorld cannot import modules in MAIN world
   await chrome.scripting
     .executeScript({
       target: { tabId },
       world: 'MAIN',
       func: pageWatchdogMainWorld,
-      args: [pageWatchdogSource(), launchUrl || '', cookieNames || []],
+      args: [pageWatchdogSource(), launchUrl || '', cookieNames || [], ping],
     })
     .catch(() => {});
   await notifyLaunchTab(tabId, launchUrl, cookieNames);
@@ -421,7 +422,8 @@ async function processLaunch(token, askedClient) {
     }
     if (transport.stripSetCookie) {
       try {
-        await setupSetCookieStrip(webUrl, { includeApp: false });
+        // Grammarly app.* must strip too — otherwise long HttpOnly cookies stick after disable
+        await setupSetCookieStrip(webUrl, { includeApp: true });
         strip = true;
       } catch (err) {
         console.warn('[1clk-v2] set-cookie strip failed', err);
@@ -436,11 +438,18 @@ async function processLaunch(token, askedClient) {
     null;
   await applyLaunchReferer(webUrl, launchReferer).catch(() => {});
 
-  // Only real LS/SS/IDB vault → page_no. Ignore empty storage_reload strategy (Semrush).
+  // Vault-driven: inject whatever formats exist (cookies and/or LS/SS/IDB). Ignore admin inject_strategy.
   const needsPageStorage = sessionNeedsPageStorage(session);
+  const vaultFormats = Array.isArray(session.includedFormats)
+    ? session.includedFormats
+    : [
+        cookieList.length ? 'cookies' : null,
+        needsPageStorage ? 'page_storage' : null,
+      ].filter(Boolean);
   await debugLog('launch.mode', {
     needsPageStorage,
-    strategy,
+    vaultFormats,
+    jarMode,
     transport: transport.mode,
     cookies: cookieList.length,
     referer: !!launchReferer,
@@ -666,8 +675,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     const tabId = _sender?.tab?.id;
     const url = msg.url || _sender?.tab?.url || '';
     const names = msg.cookieNames || [];
+    const ping = msg.extPingUrl || chrome.runtime.getURL('ping.txt');
     if (tabId) {
-      injectPageWatchdog(tabId, url, names)
+      injectPageWatchdog(tabId, url, names, ping)
         .then(() => sendResponse({ ok: true }))
         .catch(() => sendResponse({ ok: false }));
       return true;

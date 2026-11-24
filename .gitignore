@@ -14,4 +14,4 @@ apps/api/data/
 apps/api/uploads/
 *.sql.gz
 *.dump
-.rea-*/
+.rea-*/apps/extension/dist-local-debug/

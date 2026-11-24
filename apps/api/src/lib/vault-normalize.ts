@@ -152,6 +152,20 @@ export function vaultLooksUsable(v: NormalizedVault): boolean {
   return false;
 }
 
+/**
+ * Label only — extension ignores this and injects whatever is in the vault.
+ * Prefer idb when present, else storage_reload if LS/SS, else cookies.
+ */
+export function injectStrategyFromVault(
+  v: NormalizedVault,
+): 'cookies' | 'storage_reload' | 'idb' {
+  if (v.indexedDB && Object.keys(v.indexedDB).length > 0) return 'idb';
+  if (Object.keys(v.localStorage).length > 0 || Object.keys(v.sessionStorage).length > 0) {
+    return 'storage_reload';
+  }
+  return 'cookies';
+}
+
 /** Parse paste text → normalized JSON string ready to encrypt. */
 export function normalizeVaultPlain(plain: string, refererOverride?: string | null): string {
   const trimmed = plain.trim();

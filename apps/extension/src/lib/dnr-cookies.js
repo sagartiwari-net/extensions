@@ -13,7 +13,7 @@ import { relatedApexes } from './launch-tab.js';
 
 const RULE_BASE = 880000;
 const STRIP_OFFSET = 400;
-const MAX_HOST_RULES = 40;
+const MAX_HOST_RULES = 60;
 
 const AUTH_COOKIE_NAMES = new Set([
   'grauth',
@@ -25,6 +25,13 @@ const AUTH_COOKIE_NAMES = new Set([
   'tdi',
   'gnar_containerId',
   'redirect_location',
+  // Canva session / identity
+  'ASI',
+  'CCDA',
+  'CDI',
+  'CL',
+  'CSession',
+  'cs_session',
   'PHPSESSID',
   'sell_the_trend_session',
   'laravel_session',
@@ -70,6 +77,17 @@ const COMMON_PREFIXES = [
   'suite',
   'id',
   'coda',
+  // Canva design/edit APIs (extension_only host fan-out)
+  'content',
+  'export',
+  'media',
+  'static',
+  'document',
+  'design',
+  'realtime',
+  'collaboration',
+  'www-frontend',
+  'browser-measurement',
 ];
 
 const INJECT_TYPES = [
@@ -229,6 +247,20 @@ function isMultiApiSpaCookies(cookies = []) {
   );
 }
 
+function isCanvaApex(apex) {
+  return (
+    String(apex || '')
+      .replace(/^www\./, '')
+      .toLowerCase() === 'canva.com'
+  );
+}
+
+function isCanvaCookies(cookies = []) {
+  return cookies.some((c) =>
+    ['ASI', 'CCDA', 'CDI', 'CL', 'CSession', 'cs_session'].includes(c?.name),
+  );
+}
+
 /**
  * Transport (from launch_events A/B):
  * - #52 mode=jar → Grammarly opens
@@ -291,9 +323,28 @@ export function resolveCookieTransport(session = {}, toolUrl = '', opts = {}) {
     apex = '';
   }
   const chatGpt = isChatGptApex(apex) || nextAuth;
+  const canva = isCanvaApex(apex) || isCanvaCookies(cookies);
 
-  // Grammarly: jar + lease (extension_only+scrub caused refresh loops).
+  // Grammarly: jar + short lease + strip Set-Cookie.
+  // Without strip, Grammarly plants long-lived HttpOnly cookies → survive disable/blank
+  // (Jasper IDB wipe works; Grammarly cookie wipe often races SW death).
+  // extension_only+strip caused refresh loops — jar+lease+strip keeps session alive via our cookies.
   if (multiApiSpa) {
+    return {
+      mode: 'jar',
+      useDnrCookies: false,
+      writeJar: true,
+      stripSetCookie: true,
+      scrubJar: false,
+      leaseJar: true,
+      aggressiveStrip: false,
+    };
+  }
+
+  // Canva: many design/edit/API subdomains. extension_only+strip drops live edit tokens
+  // → "You can't edit this design anymore" while still appearing logged in.
+  // Jar lets Domain=.canva.com cover all hosts; no strip so collab/edit Set-Cookie can refresh.
+  if (canva) {
     return {
       mode: 'jar',
       useDnrCookies: false,

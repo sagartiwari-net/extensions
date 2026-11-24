@@ -236,19 +236,25 @@ export async function clearCookiesBySnapshot(snapshot = []) {
 
 /**
  * chrome.cookies.set often returns null instead of throwing — must check result.
- * @param {{ maxAgeSeconds?: number }} [opts] — short lease so disable cannot leave forever-cookies
+ * @param {{ maxAgeSeconds?: number, allowPageClear?: boolean }} [opts]
+ *   maxAgeSeconds — short lease so disable cannot leave forever-cookies
+ *   allowPageClear — force httpOnly:false so kill-switch / watchdog can clear via document.cookie
+ *     (needed for Grammarly grauth — otherwise HttpOnly survives disable)
  */
 export async function setCookieFlexible(cookie, targetUrl, opts = {}) {
   const resolvedUrl = urlForCookie(cookie, targetUrl);
   const url = new URL(resolvedUrl);
   const hostPrefixed = isHostPrefixedCookie(cookie.name);
   const onHttps = resolvedUrl.startsWith('https') || targetUrl.startsWith('https');
+  // __Host- / __Secure- must stay HttpOnly-capable; page-clear only for normal auth cookies
+  const pageClear =
+    !!opts.allowPageClear && !hostPrefixed && !isSecurePrefixedCookie(cookie.name);
   const base = {
     name: cookie.name,
     value: String(cookie.value ?? ''),
     path: hostPrefixed ? '/' : cookie.path || '/',
     secure: forceSecure(cookie.name) || cookie.secure === true || onHttps,
-    httpOnly: forceHttpOnly(cookie.name) || !!cookie.httpOnly,
+    httpOnly: pageClear ? false : forceHttpOnly(cookie.name) || !!cookie.httpOnly,
     sameSite: normalizeSameSite(cookie.sameSite),
   };
 

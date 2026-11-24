@@ -7,7 +7,8 @@ import { setCookieFlexible, cookiesForInject, clearCookiesForApexDomain } from '
 import { apexFromHost } from './dnr-cookies.js';
 
 /** Renew must land before this; alarm/port tick ~30–45s. */
-export const JAR_LEASE_SECONDS = 120;
+/** Short lease — after disable, renew stops and jar auth dies even if SW wipe races. */
+export const JAR_LEASE_SECONDS = 90;
 
 const AUTH_COOKIE_NAMES = new Set([
   'grauth',
@@ -19,6 +20,12 @@ const AUTH_COOKIE_NAMES = new Set([
   'tdi',
   'gnar_containerId',
   'redirect_location',
+  'ASI',
+  'CCDA',
+  'CDI',
+  'CL',
+  'CSession',
+  'cs_session',
   'PHPSESSID',
   'sell_the_trend_session',
   'laravel_session',
@@ -53,7 +60,10 @@ function cookieAppliesToHost(cookieDomain, host, apex) {
 }
 
 function leaseOpts(leaseSeconds) {
-  return leaseSeconds > 0 ? { maxAgeSeconds: leaseSeconds } : {};
+  // allowPageClear: Grammarly grauth is otherwise forceHttpOnly → document.cookie cannot logout
+  return leaseSeconds > 0
+    ? { maxAgeSeconds: leaseSeconds, allowPageClear: true }
+    : { allowPageClear: true };
 }
 
 /** DigitaVision replicateCookieToLaunchHost — members→tool / host-only → launch. */

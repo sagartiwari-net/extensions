@@ -1,16 +1,20 @@
 /**
- * MAIN-world watchdog source — injected as a string so content scripts can
- * install it on EVERY tool page (Grammarly, ChatGPT, …) without waiting for SW.
+ * MAIN-world watchdog — blank ONLY when the extension is actually gone.
  *
- * On ~2s without beats: NextAuth CSRF signout (clears HttpOnly) → wipe → blank.
- * Beats stop instantly on extension disable (port disconnect) — no need for heavy polling.
+ * Beats alone are NOT enough: content-script death (reload / SPA race) used to
+ * blank tools while the extension was still enabled → false about:blank, and
+ * Grammarly HttpOnly cookies survived (Jasper IDB did not).
+ *
+ * Kill path: no beats for DEAD_MS → fetch(ext ping URL) fails → wipe then blank.
  */
 export function pageWatchdogSource() {
-  return String(function installOneClkWatchdog(launchUrl, cookieNames) {
+  return String(function installOneClkWatchdog(launchUrl, cookieNames, extPingUrl) {
     if (window.__oneclk_page_watchdog) {
       try {
         window.__oneclk_watchdog_names = Array.isArray(cookieNames) ? cookieNames : [];
         window.__oneclk_last_beat = Date.now();
+        window.__oneclk_watchdog_armed = true;
+        if (extPingUrl) window.__oneclk_ext_ping = extPingUrl;
       } catch (e) {
         /* */
       }
@@ -19,10 +23,13 @@ export function pageWatchdogSource() {
     window.__oneclk_page_watchdog = true;
     window.__oneclk_watchdog_names = Array.isArray(cookieNames) ? cookieNames : [];
     window.__oneclk_last_beat = Date.now();
+    window.__oneclk_watchdog_armed = false;
+    if (extPingUrl) window.__oneclk_ext_ping = extPingUrl;
 
-    var DEAD_MS = 2000;
+    var DEAD_MS = 8000;
     var APEX_COOKIE = '__1clk_launch';
     var killing = false;
+    var probing = false;
 
     function apexFromHref(href) {
       try {
@@ -60,6 +67,8 @@ export function pageWatchdogSource() {
       if (event.source !== window) return;
       if (event.data && event.data.type === '__1clk_beat') {
         window.__oneclk_last_beat = Date.now();
+        window.__oneclk_watchdog_armed = true;
+        if (event.data.ping) window.__oneclk_ext_ping = event.data.ping;
       }
     });
 
@@ -73,7 +82,14 @@ export function pageWatchdogSource() {
         /* */
       }
       var host = location.hostname;
-      var names = {};
+      var names = {
+        grauth: 1,
+        gac: 1,
+        'csrf-token': 1,
+        isGrammarlyUser: 1,
+        last_authn_event: 1,
+        gnar_containerId: 1,
+      };
       var list = window.__oneclk_watchdog_names || [];
       for (var i = 0; i < list.length; i++) names[list[i]] = 1;
       try {
@@ -113,7 +129,7 @@ export function pageWatchdogSource() {
       }
     }
 
-    function wipeStorage() {
+    function wipeStorageSync() {
       try {
         localStorage.clear();
       } catch (e) {
@@ -137,6 +153,12 @@ export function pageWatchdogSource() {
           });
         }
       } catch (e7) {
+        /* */
+      }
+      try {
+        indexedDB.deleteDatabase('firebaseLocalStorageDb');
+        indexedDB.deleteDatabase('firebase-heartbeat-database');
+      } catch (e8) {
         /* */
       }
     }
@@ -214,42 +236,91 @@ export function pageWatchdogSource() {
     function finalize() {
       if (killing) return;
       killing = true;
-      // Blank FIRST — ChatGPT CSRF fetch often hung and never reached replace()
-      goBlank();
       wipeVisibleCookies();
-      wipeStorage();
+      wipeStorageSync();
       fireSignoutBeacons();
-      // Best-effort NextAuth HttpOnly clear in parallel (don't block blank)
       try {
-        Promise.race([
-          Promise.resolve(nextAuthSignOut()),
-          new Promise(function (r) {
-            setTimeout(r, 400);
-          }),
-        ]).catch(function () {
-          /* */
-        });
+        nextAuthSignOut();
       } catch (e3) {
         /* */
       }
-      setTimeout(goBlank, 100);
-      setTimeout(goBlank, 500);
+      setTimeout(goBlank, 80);
+      setTimeout(goBlank, 400);
+      setTimeout(goBlank, 1200);
     }
 
-    setInterval(function () {
-      if (killing) return;
-      if (Date.now() - (window.__oneclk_last_beat || 0) >= DEAD_MS) finalize();
-    }, 1000);
+    /** Extension still installed? web_accessible ping works even if content script died. */
+    function extensionStillThere() {
+      var ping = window.__oneclk_ext_ping;
+      if (!ping) return Promise.resolve(false);
+      return new Promise(function (resolve) {
+        var done = false;
+        var finish = function (ok) {
+          if (done) return;
+          done = true;
+          resolve(!!ok);
+        };
+        try {
+          fetch(ping + '?t=' + Date.now(), {
+            method: 'GET',
+            cache: 'no-store',
+            credentials: 'omit',
+          })
+            .then(function (r) {
+              finish(!!(r && r.ok));
+            })
+            .catch(function () {
+              finish(false);
+            });
+        } catch (e) {
+          finish(false);
+        }
+        // Image fallback if fetch blocked
+        try {
+          var img = new Image();
+          img.onload = function () {
+            finish(true);
+          };
+          img.onerror = function () {
+            /* fetch decides */
+          };
+          img.src = ping.replace(/ping\.txt.*/, 'icons/icon-16.png') + '?t=' + Date.now();
+        } catch (e2) {
+          /* */
+        }
+        setTimeout(function () {
+          finish(false);
+        }, 1500);
+      });
+    }
+
+    function maybeKill() {
+      if (killing || probing) return;
+      if (!window.__oneclk_watchdog_armed) return;
+      if (Date.now() - (window.__oneclk_last_beat || 0) < DEAD_MS) return;
+      probing = true;
+      extensionStillThere().then(function (alive) {
+        probing = false;
+        if (killing) return;
+        if (alive) {
+          // CS / beats died but extension still loaded — do NOT blank (false about:blank)
+          window.__oneclk_last_beat = Date.now();
+          return;
+        }
+        finalize();
+      });
+    }
+
+    setInterval(maybeKill, 1000);
   });
 }
 
 /**
  * Runs inside chrome.scripting.executeScript (MAIN world).
  * Must be self-contained — Chrome only serializes THIS function, not imports.
- * `sourceText` is the string from pageWatchdogSource().
  */
-export function pageWatchdogMainWorld(sourceText, launchUrl, cookieNames = []) {
+export function pageWatchdogMainWorld(sourceText, launchUrl, cookieNames = [], extPingUrl = '') {
   // eslint-disable-next-line no-new-func
   const install = (0, eval)('(' + sourceText + ')');
-  install(launchUrl || '', cookieNames || []);
+  install(launchUrl || '', cookieNames || [], extPingUrl || '');
 }

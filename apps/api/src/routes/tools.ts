@@ -17,6 +17,7 @@ import {
 } from '../lib/tool-key.js';
 import { parseBrandSettings } from '../lib/extension-packager.js';
 import {
+  injectStrategyFromVault,
   normalizeVault,
   normalizeVaultPlain,
   vaultLooksUsable,
@@ -79,6 +80,19 @@ async function bustToolsListCache() {
   }
 }
 
+function parseFormats(raw: unknown): string[] {
+  try {
+    if (Array.isArray(raw)) return raw.filter((x): x is string => typeof x === 'string');
+    if (typeof raw === 'string' && raw.trim()) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed.filter((x): x is string => typeof x === 'string');
+    }
+  } catch {
+    /* */
+  }
+  return [];
+}
+
 type ToolListRow = RowDataPacket & {
   id: number;
   reseller_id: number;
@@ -89,6 +103,7 @@ type ToolListRow = RowDataPacket & {
   status: string;
   inject_strategy: string;
   cookie_jar_mode?: string | null;
+  cookie_formats?: unknown;
   security_tier: number;
   pool_id: number | null;
   has_cookie: number;
@@ -213,7 +228,7 @@ export const toolRoutes: FastifyPluginAsync = async (app) => {
       const jarCol = (await hasCookieJarModeColumn()) ? ', t.cookie_jar_mode' : '';
       const [rows] = await pool.query<ToolListRow[]>(
         `SELECT t.id, t.reseller_id, r.slug AS reseller_slug, t.tool_key, t.name, t.web_url,
-                t.status, t.inject_strategy${jarCol}, t.security_tier, t.pool_id, t.updated_at,
+                t.status, t.inject_strategy${jarCol}, t.cookie_formats, t.security_tier, t.pool_id, t.updated_at,
                 (t.cookie_payload IS NOT NULL AND t.cookie_payload <> '') AS has_cookie
          FROM tools t
          JOIN resellers r ON r.id = t.reseller_id
@@ -226,6 +241,7 @@ export const toolRoutes: FastifyPluginAsync = async (app) => {
       const items = rows.map((r) => ({
         ...r,
         cookie_jar_mode: r.cookie_jar_mode || 'auto',
+        cookie_formats: parseFormats(r.cookie_formats),
       }));
 
       const payload = {
@@ -345,7 +361,7 @@ export const toolRoutes: FastifyPluginAsync = async (app) => {
           cookie_jar_mode: tool.cookie_jar_mode || 'auto',
           security_tier: tool.security_tier,
           pool_id: tool.pool_id,
-          cookie_formats: tool.cookie_formats,
+          cookie_formats: parseFormats(tool.cookie_formats),
           updating_message: tool.updating_message,
           has_cookie: Boolean(tool.has_cookie),
           vault_preview,
@@ -386,17 +402,9 @@ export const toolRoutes: FastifyPluginAsync = async (app) => {
           });
         }
         payload = encryptCookieData(normalizedPlain, password);
-        if (!body.cookie_formats) {
-          formatsList = vault.includedFormats as typeof formatsList;
-        }
-        if (
-          !body.inject_strategy &&
-          (vault.indexedDB ||
-            Object.keys(vault.localStorage).length > 0 ||
-            Object.keys(vault.sessionStorage).length > 0)
-        ) {
-          injectStrategy = vault.indexedDB ? 'idb' : 'storage_reload';
-        }
+        formatsList = vault.includedFormats as typeof formatsList;
+        // Always derive from vault — admin "Inject mode" removed; paste decides formats
+        injectStrategy = injectStrategyFromVault(vault);
       }
       const formats = JSON.stringify(formatsList);
       const jarMode = body.cookie_jar_mode || 'auto';
@@ -464,10 +472,12 @@ export const toolRoutes: FastifyPluginAsync = async (app) => {
         const existing = await existingKeysForReseller(tool.reseller_id, id);
         nextToolKey = nextUniqueToolKey(baseKey, existing);
       }
+      const vaultPaste = Boolean(body.cookie_plain?.trim());
       const map: Record<string, unknown> = {
         name: body.name,
         web_url: body.web_url,
-        inject_strategy: body.inject_strategy,
+        // Vault paste always wins; otherwise keep optional manual label
+        inject_strategy: vaultPaste ? undefined : body.inject_strategy,
         security_tier: body.security_tier,
         status: body.status,
         tool_key: nextToolKey,
@@ -481,15 +491,15 @@ export const toolRoutes: FastifyPluginAsync = async (app) => {
           vals.push(v);
         }
       }
-      if (body.cookie_formats) {
+      if (body.cookie_formats && !vaultPaste) {
         fields.push('cookie_formats = ?');
         vals.push(JSON.stringify(body.cookie_formats));
       }
-      if (body.cookie_plain?.trim()) {
+      if (vaultPaste) {
         const password = body.cookie_password || tool.cookie_password || randomBytes(12).toString('hex');
         const refererOverride =
           typeof body.referer === 'string' && body.referer.trim() ? body.referer.trim() : null;
-        const normalizedPlain = normalizeVaultPlain(body.cookie_plain.trim(), refererOverride);
+        const normalizedPlain = normalizeVaultPlain(String(body.cookie_plain || '').trim(), refererOverride);
         const vault = normalizeVault(JSON.parse(normalizedPlain));
         if (!vaultLooksUsable(vault)) {
           return reply.code(400).send({
@@ -499,21 +509,11 @@ export const toolRoutes: FastifyPluginAsync = async (app) => {
           });
         }
         const cipher = encryptCookieData(normalizedPlain, password);
-        // Auto-tag formats from paste so admin UI / launch know what's inside
-        if (!body.cookie_formats) {
-          fields.push('cookie_formats = ?');
-          vals.push(JSON.stringify(vault.includedFormats));
-        }
-        // Prefer storage/idb strategy when vault has page storage
-        if (
-          !body.inject_strategy &&
-          (vault.indexedDB ||
-            Object.keys(vault.localStorage).length > 0 ||
-            Object.keys(vault.sessionStorage).length > 0)
-        ) {
-          fields.push('inject_strategy = ?');
-          vals.push(vault.indexedDB ? 'idb' : 'storage_reload');
-        }
+        // Always refresh formats + strategy from paste (Inject mode UI removed)
+        fields.push('cookie_formats = ?');
+        vals.push(JSON.stringify(vault.includedFormats));
+        fields.push('inject_strategy = ?');
+        vals.push(injectStrategyFromVault(vault));
 
         if (tool.pool_id) {
           // Bi-directional: any linked tool save updates the whole pool

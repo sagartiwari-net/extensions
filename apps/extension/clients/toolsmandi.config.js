@@ -1,19 +1,19 @@
-/** Friend / reseller build example — copy & edit per client. */
+/** ToolsMandi production friend pack — packager may override from reseller brand. */
 export const CLIENT_CONFIG = {
   SLUG: 'toolsmandi',
   RESELLER_SLUG: 'toolsmandi',
   NAME: 'ToolsMandi Access',
-  API_BASE: 'https://api.example.com/api',
+  API_BASE: 'https://panel.1clkaccess.store/api',
   MEMBER_MATCHES: [
-    'https://toolsmember.example.com/*',
-    'https://*.toolsmember.example.com/*',
+    'https://toolsmandi.com/*',
+    'https://*.toolsmandi.com/*',
   ],
-  /** Admin /launch handoff — must match ADMIN_ORIGIN in prod */
-  BRIDGE_MATCHES: ['https://admin.example.com/*'],
-  MEMBERSHIP_HOME: 'https://toolsmember.example.com/',
+  BRIDGE_MATCHES: ['https://panel.1clkaccess.store/*'],
+  MEMBERSHIP_HOME: 'https://toolsmandi.com/member',
   EXTERNALLY_CONNECTABLE: [
-    'https://admin.example.com/*',
-    'https://toolsmember.example.com/*',
+    'https://panel.1clkaccess.store/*',
+    'https://toolsmandi.com/*',
+    'https://*.toolsmandi.com/*',
   ],
   INDICATOR_ID: 'oneclk-v2-toolsmandi',
 };

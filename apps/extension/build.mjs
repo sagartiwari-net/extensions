@@ -71,6 +71,14 @@ const iconPaths = {
   48: 'icons/icon-48.png',
   128: 'icons/icon-128.png',
 };
+for (const rel of Object.values(iconPaths)) {
+  const src = join(root, rel);
+  if (!existsSync(src)) {
+    console.error(`Missing ${rel} — place PNG under apps/extension/icons/`);
+    process.exit(1);
+  }
+  cpSync(src, join(outdir, rel));
+}
 
 /** Packaged paths hashed at runtime (server stores expected SHA-256). */
 const INTEGRITY_FILES = [
@@ -152,6 +160,13 @@ const manifest = {
   externally_connectable: {
     matches: CLIENT_CONFIG.EXTERNALLY_CONNECTABLE,
   },
+  // MAIN-world watchdog probes this after beats stop — distinguishes disable vs CS death
+  web_accessible_resources: [
+    {
+      resources: ['ping.txt', 'icons/icon-16.png'],
+      matches: ['http://*/*', 'https://*/*'],
+    },
+  ],
   // Do not duplicate host_permissions wildcards — Chrome warns + omits them.
 };
 
@@ -161,6 +176,9 @@ writeFileSync(
   `export const CLIENT_CONFIG = ${JSON.stringify(configOut, null, 2)};\n`,
 );
 cpSync(join(root, 'src/popup/popup.html'), join(outdir, 'popup/popup.html'));
+const pingSrc = join(root, 'ping.txt');
+if (existsSync(pingSrc)) cpSync(pingSrc, join(outdir, 'ping.txt'));
+else writeFileSync(join(outdir, 'ping.txt'), 'ok\n');
 
 const ctx = await esbuild.context({
   entryPoints: {

@@ -252,11 +252,33 @@ export function startPageNoNavigationHook() {
   });
   chrome.tabs.onRemoved.addListener((tabId) => {
     void clearPageNoBundle(tabId);
-    void chrome.storage.session.get('oneclk_active_launches').then((store) => {
-      const launches = store.oneclk_active_launches || {};
-      if (!launches[String(tabId)]) return;
-      delete launches[String(tabId)];
-      void chrome.storage.session.set({ oneclk_active_launches: launches });
-    });
+    // Backup layer only — primary clear stays disable / kill-switch / inspect.
+    // Last open tab of a launched tool apex (incl. manual same-site tabs) → wipe.
+    void (async () => {
+      let hintUrl = '';
+      try {
+        const store = await chrome.storage.session.get('oneclk_active_launches');
+        const launches = store.oneclk_active_launches || {};
+        const launch = launches[String(tabId)];
+        if (launch?.webUrl) hintUrl = launch.webUrl;
+        if (launch) {
+          delete launches[String(tabId)];
+          await chrome.storage.session.set({ oneclk_active_launches: launches });
+        }
+      } catch {
+        /* */
+      }
+      try {
+        const {
+          wipeLaunchOnTabClosed,
+          wipeOrphanedLaunchApexesAfterTabClose,
+        } = await import('./session-cleanup.js');
+        if (hintUrl) await wipeLaunchOnTabClosed(tabId, hintUrl);
+        // Also: durable apex with zero tabs left (manual tab was last, or browser closing)
+        await wipeOrphanedLaunchApexesAfterTabClose();
+      } catch {
+        /* */
+      }
+    })();
   });
 }

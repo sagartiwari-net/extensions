@@ -14,7 +14,11 @@ import {
   clearCookiesForApexDomain,
   clearCookiesForHost,
 } from './cookies.js';
-import { apexFromHost, clearDnrCookieSession } from './dnr-cookies.js';
+import {
+  apexFromHost,
+  clearDnrCookieSession,
+  clearDnrCookieSessionForApex,
+} from './dnr-cookies.js';
 import { relatedApexes } from './launch-tab.js';
 
 const SESSION_KEY = 'oneclk_launch_cleanup';
@@ -169,7 +173,13 @@ export async function clearBrowsingDataForHosts(hosts = []) {
   if (!origins.length) return;
   await chrome.browsingData.remove(
     { origins },
-    { cookies: true, cacheStorage: true, serviceWorkers: true, localStorage: true },
+    {
+      cookies: true,
+      cacheStorage: true,
+      serviceWorkers: true,
+      localStorage: true,
+      indexedDB: true,
+    },
   );
 }
 
@@ -224,88 +234,159 @@ export async function markDisablePending() {
   await chrome.storage.local.set({ [DISABLE_PENDING_KEY]: Date.now() });
 }
 
-/**
- * Fire-and-forget wipe for onSuspend (tab open OR closed).
- * Must not await storage — use wipeMemory.
- */
-export function fireDisableWipeSync() {
+/** Known Grammarly auth names — remove without waiting for getAll (SW dies mid-async). */
+const GRAMMARLY_COOKIE_NAMES = [
+  'grauth',
+  'gac',
+  'csrf-token',
+  'csrf_token',
+  'isGrammarlyUser',
+  'last_authn_event',
+  'tdi',
+  'gnar_containerId',
+  'redirect_location',
+  'FunnelId',
+  'variant_user',
+];
+
+const GRAMMARLY_HOSTS = [
+  'grammarly.com',
+  'www.grammarly.com',
+  'app.grammarly.com',
+  'auth.grammarly.com',
+  'coda.grammarly.com',
+  'gnar.grammarly.com',
+  'data.grammarly.com',
+  'subscription.grammarly.com',
+];
+
+const CANVA_COOKIE_NAMES = ['ASI', 'CCDA', 'CDI', 'CL', 'CSession', 'cs_session'];
+
+const CANVA_HOSTS = [
+  'canva.com',
+  'www.canva.com',
+  'api.canva.com',
+  'content.canva.com',
+  'export.canva.com',
+  'media.canva.com',
+  'document.canva.com',
+  'static.canva.com',
+];
+
+function purgeNamedOnHosts(names, hosts) {
+  for (const name of names) {
+    for (const host of hosts) {
+      try {
+        chrome.cookies.remove(
+          { url: `https://${host}/`, name },
+          () => void chrome.runtime.lastError,
+        );
+      } catch {
+        /* */
+      }
+    }
+  }
+}
+
+/** Origins always wiped on disable — works with ZERO open tabs (Jasper IDB + jar). */
+const ALWAYS_WIPE_ORIGINS = [
+  'https://grammarly.com',
+  'http://grammarly.com',
+  'https://www.grammarly.com',
+  'https://app.grammarly.com',
+  'https://auth.grammarly.com',
+  'https://coda.grammarly.com',
+  'https://canva.com',
+  'http://canva.com',
+  'https://www.canva.com',
+  'https://api.canva.com',
+  'https://content.canva.com',
+  'https://export.canva.com',
+  'https://media.canva.com',
+  'https://document.canva.com',
+  'https://app.jasper.ai',
+  'https://jasper.ai',
+  'https://www.jasper.ai',
+  'https://chatgpt.com',
+  'https://www.chatgpt.com',
+  'https://chat.openai.com',
+  'https://openai.com',
+  'https://www.openai.com',
+  'https://semrush.com',
+  'https://www.semrush.com',
+];
+
+const ALWAYS_WIPE_APEXES = [
+  'grammarly.com',
+  'canva.com',
+  'jasper.ai',
+  'chatgpt.com',
+  'openai.com',
+  'semrush.com',
+];
+
+/** Immediate named removes — no getAll race (Grammarly / Canva jar leave-behind). */
+function fireNamedCookiePurge(apexes = []) {
+  const list = (apexes || []).map((a) => String(a || '').toLowerCase());
+  const all = !list.length;
+  if (all || list.some((a) => a.includes('grammarly'))) {
+    purgeNamedOnHosts(GRAMMARLY_COOKIE_NAMES, GRAMMARLY_HOSTS);
+  }
+  if (all || list.some((a) => a.includes('canva'))) {
+    purgeNamedOnHosts(CANVA_COOKIE_NAMES, CANVA_HOSTS);
+  }
+}
+
+function wipeApexCookiesFireForget(apexes = []) {
+  fireNamedCookiePurge(apexes);
+  for (const apex of filterApexes(apexes)) {
+    try {
+      for (const domain of [apex, `.${apex}`]) {
+        chrome.cookies.getAll({ domain }, (list) => {
+          for (const c of list || []) {
+            const host = (c.domain || apex).replace(/^\./, '');
+            if (isWhitelistedHost(host)) continue;
+            const path = c.path || '/';
+            for (const url of [
+              `https://${host}${path}`,
+              `https://www.${host}${path}`,
+              `http://${host}${path}`,
+            ]) {
+              try {
+                chrome.cookies.remove({ url, name: c.name }, () => void chrome.runtime.lastError);
+              } catch {
+                /* */
+              }
+            }
+          }
+        });
+      }
+    } catch {
+      /* */
+    }
+  }
+}
+
+function wipeOriginsFireForget(origins = []) {
+  if (!origins.length || !chrome.browsingData?.remove) return;
   try {
-    chrome.storage.local.set({ [DISABLE_PENDING_KEY]: Date.now() });
+    chrome.browsingData.remove(
+      { origins },
+      {
+        cookies: true,
+        cacheStorage: true,
+        serviceWorkers: true,
+        localStorage: true,
+        indexedDB: true,
+      },
+      () => void chrome.runtime.lastError,
+    );
   } catch {
     /* */
   }
+}
 
-  const apexes = filterApexes(wipeMemory.apexes || []);
-  const hosts = filterHosts(wipeMemory.hosts || []);
-  const origins = wipeMemory.origins?.length
-    ? wipeMemory.origins
-    : hostsToOrigins(hosts);
-  const snaps = wipeMemory.cookies || [];
-
-  try {
-    void clearDnrCookieSession();
-  } catch {
-    /* */
-  }
-
-  if (origins.length && chrome.browsingData?.remove) {
-    try {
-      chrome.browsingData.remove(
-        { origins },
-        { cookies: true, cacheStorage: true, serviceWorkers: true, localStorage: true },
-        () => void chrome.runtime.lastError,
-      );
-    } catch {
-      /* */
-    }
-  }
-
-  for (const snap of snaps) {
-    if (!snap?.name) continue;
-    const domain = String(snap.domain || '')
-      .replace(/^\./, '')
-      .toLowerCase();
-    if (!domain || isWhitelistedHost(domain)) continue;
-    const url = `https://${domain}/`;
-    try {
-      chrome.cookies.remove({ url, name: snap.name }, () => void chrome.runtime.lastError);
-      chrome.cookies.remove(
-        { url: `https://www.${domain}/`, name: snap.name },
-        () => void chrome.runtime.lastError,
-      );
-    } catch {
-      /* */
-    }
-  }
-
-  for (const apex of apexes) {
-    try {
-      chrome.cookies.getAll({ domain: apex }, (list) => {
-        for (const c of list || []) {
-          const host = (c.domain || apex).replace(/^\./, '');
-          if (isWhitelistedHost(host)) continue;
-          chrome.cookies.remove(
-            { url: `https://${host}${c.path || '/'}`, name: c.name },
-            () => void chrome.runtime.lastError,
-          );
-        }
-      });
-      chrome.cookies.getAll({ domain: `.${apex}` }, (list) => {
-        for (const c of list || []) {
-          const host = (c.domain || apex).replace(/^\./, '');
-          if (isWhitelistedHost(host)) continue;
-          chrome.cookies.remove(
-            { url: `https://${host}${c.path || '/'}`, name: c.name },
-            () => void chrome.runtime.lastError,
-          );
-        }
-      });
-    } catch {
-      /* */
-    }
-  }
-
-  // Blank any open tool tabs (ChatGPT often skipped page blank when CSRF fetch hung)
+function blankLaunchTabsFireForget(apexes = [], hosts = []) {
   try {
     chrome.tabs.query({}, (tabs) => {
       for (const tab of tabs || []) {
@@ -321,13 +402,102 @@ export function fireDisableWipeSync() {
           apexes.includes(apex) ||
           apexes.some((a) => relatedApexes(a).includes(apex)) ||
           hosts.some(
-            (h) =>
-              tab.url.includes(h) ||
-              apex === h ||
-              apex.endsWith(`.${h}`),
+            (h) => tab.url.includes(h) || apex === h || apex.endsWith(`.${h}`),
           );
         if (hit) {
           chrome.tabs.update(tab.id, { url: 'about:blank' }, () => void chrome.runtime.lastError);
+        }
+      }
+    });
+  } catch {
+    /* */
+  }
+}
+
+/**
+ * Fire-and-forget wipe for onSuspend / disable (tab open OR closed).
+ * MUST NOT depend on open tabs or warm wipeMemory — MV3 kills SW before async storage.
+ */
+export function fireDisableWipeSync() {
+  try {
+    chrome.storage.local.set({ [DISABLE_PENDING_KEY]: Date.now() });
+  } catch {
+    /* */
+  }
+
+  const apexes = filterApexes([
+    ...ALWAYS_WIPE_APEXES,
+    ...(wipeMemory.apexes || []),
+  ]);
+  const hosts = filterHosts(wipeMemory.hosts || []);
+  const origins = [
+    ...ALWAYS_WIPE_ORIGINS,
+    ...(wipeMemory.origins?.length ? wipeMemory.origins : hostsToOrigins(hosts)),
+  ];
+  const snaps = wipeMemory.cookies || [];
+
+  try {
+    void clearDnrCookieSession();
+  } catch {
+    /* */
+  }
+
+  // Closed-tab path: always purge known jar tools (no storage / memory required)
+  fireNamedCookiePurge(ALWAYS_WIPE_APEXES);
+  wipeOriginsFireForget([...new Set(origins)]);
+  wipeApexCookiesFireForget(apexes);
+
+  for (const snap of snaps) {
+    if (!snap?.name) continue;
+    const domain = String(snap.domain || '')
+      .replace(/^\./, '')
+      .toLowerCase();
+    if (!domain || isWhitelistedHost(domain)) continue;
+    try {
+      chrome.cookies.remove({ url: `https://${domain}/`, name: snap.name }, () => void chrome.runtime.lastError);
+      chrome.cookies.remove(
+        { url: `https://www.${domain}/`, name: snap.name },
+        () => void chrome.runtime.lastError,
+      );
+      chrome.cookies.remove(
+        { url: `https://app.${domain}/`, name: snap.name },
+        () => void chrome.runtime.lastError,
+      );
+    } catch {
+      /* */
+    }
+  }
+
+  blankLaunchTabsFireForget(apexes, hosts);
+
+  // SW may have woken empty — also wipe from durable storage (callback, no await)
+  try {
+    chrome.storage.local.get([APEX_KEY, HOSTS_KEY, SESSION_KEY], (store) => {
+      if (chrome.runtime.lastError) return;
+      const moreApex = filterApexes(store?.[APEX_KEY] || []);
+      const moreHosts = filterHosts(store?.[HOSTS_KEY] || []);
+      wipeOriginsFireForget(hostsToOrigins(moreHosts));
+      wipeApexCookiesFireForget(moreApex);
+      blankLaunchTabsFireForget(moreApex, moreHosts);
+      for (const entry of Object.values(store?.[SESSION_KEY] || {})) {
+        for (const snap of entry?.cookies || []) {
+          if (!snap?.name) continue;
+          const domain = String(snap.domain || '')
+            .replace(/^\./, '')
+            .toLowerCase();
+          if (!domain || isWhitelistedHost(domain)) continue;
+          try {
+            chrome.cookies.remove(
+              { url: `https://${domain}/`, name: snap.name },
+              () => void chrome.runtime.lastError,
+            );
+            chrome.cookies.remove(
+              { url: `https://app.${domain}/`, name: snap.name },
+              () => void chrome.runtime.lastError,
+            );
+          } catch {
+            /* */
+          }
         }
       }
     });
@@ -507,4 +677,105 @@ export async function hydrateWipeMemoryFromStorage() {
     if (entry?.cookies?.length) cookies.push(...entry.cookies);
   }
   syncWipeMemory({ apexes, hosts, cookies });
+}
+
+/** True if any open http(s) tab still belongs to this apex (or related). */
+export async function anyOpenTabForApex(apex) {
+  const targets = new Set(filterApexes(relatedApexes(apex)));
+  if (!targets.size) return false;
+  try {
+    const tabs = await chrome.tabs.query({});
+    for (const tab of tabs || []) {
+      if (!tab?.url?.startsWith('http')) continue;
+      let tabApex = '';
+      try {
+        tabApex = apexFromHost(new URL(tab.url).hostname);
+      } catch {
+        continue;
+      }
+      if (!tabApex || isWhitelistedHost(tabApex)) continue;
+      if (targets.has(tabApex)) return true;
+      for (const t of targets) {
+        if (relatedApexes(t).includes(tabApex)) return true;
+      }
+    }
+  } catch {
+    /* */
+  }
+  return false;
+}
+
+/**
+ * Backup layer (2nd): last tab of a launched tool apex closed → wipe cookies/IDB.
+ * Primary layer stays: disable / kill-switch / inspect / refresh (unchanged).
+ * Only runs while extension is still alive (SW can await).
+ */
+export async function wipeLaunchOnTabClosed(tabId, webUrl = '') {
+  let url = webUrl;
+  let cookies = [];
+  try {
+    const { [SESSION_KEY]: map = {} } = await chrome.storage.local.get(SESSION_KEY);
+    const entry = map[String(tabId)];
+    if (entry?.url) url = entry.url;
+    if (entry?.cookies?.length) cookies = entry.cookies;
+    if (entry) {
+      delete map[String(tabId)];
+      await chrome.storage.local.set({ [SESSION_KEY]: map });
+    }
+  } catch {
+    /* */
+  }
+
+  let apex = '';
+  try {
+    if (url?.startsWith('http')) apex = apexFromHost(new URL(url).hostname);
+  } catch {
+    apex = '';
+  }
+  if (!apex || isWhitelistedHost(apex)) return false;
+
+  // Same-site tab still open (launch OR manual) → wait
+  if (await anyOpenTabForApex(apex)) return false;
+
+  const apexes = filterApexes(relatedApexes(apex));
+  const hosts = collectCleanupHosts(url || `https://${apex}/`, cookies);
+  syncWipeMemory({ apexes, hosts, cookies });
+
+  fireNamedCookiePurge(apexes);
+  await clearDnrCookieSessionForApex(apex).catch(() => {});
+  for (const a of apexes) {
+    await clearCookiesForApexDomain(a).catch(() => {});
+  }
+  await clearBrowsingDataForHosts(hosts).catch(() => {});
+  await clearCookiesBySnapshot(cookies).catch(() => {});
+  for (const host of hosts) {
+    await clearCookiesForHost(host).catch(() => {});
+  }
+  return true;
+}
+
+/**
+ * After any tab close: wipe each durable/launch apex that now has zero open tabs.
+ * Covers manual same-site tabs + browser-close (tabs drain → last apex wipe).
+ */
+export async function wipeOrphanedLaunchApexesAfterTabClose() {
+  const store = await chrome.storage.local.get([APEX_KEY, SESSION_KEY]);
+  const found = [...(store[APEX_KEY] || [])];
+  // Apexes still referenced by leftover session entries
+  for (const entry of Object.values(store[SESSION_KEY] || {})) {
+    if (entry?.apex) found.push(entry.apex);
+    try {
+      if (entry?.url) found.push(apexFromHost(new URL(entry.url).hostname));
+    } catch {
+      /* */
+    }
+  }
+  const unique = filterApexes([...new Set(found)]);
+  let wiped = 0;
+  for (const apex of unique) {
+    if (await anyOpenTabForApex(apex)) continue;
+    const ok = await wipeLaunchOnTabClosed(0, `https://${apex}/`);
+    if (ok) wiped += 1;
+  }
+  return wiped;
 }

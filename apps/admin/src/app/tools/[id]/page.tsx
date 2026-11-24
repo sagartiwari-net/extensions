@@ -36,6 +36,7 @@ type Tool = {
   status: string;
   inject_strategy: string;
   cookie_jar_mode?: string;
+  cookie_formats?: string[];
   security_tier: number;
   has_cookie: boolean;
   vault_preview?: VaultPreview | null;
@@ -209,8 +210,12 @@ export default function ToolDetailPage() {
         </Card>
         <Card size="sm">
           <CardHeader className="pb-1">
-            <CardDescription>Strategy</CardDescription>
-            <CardTitle className="text-base">{tool.inject_strategy}</CardTitle>
+            <CardDescription>Vault formats</CardDescription>
+            <CardTitle className="text-base">
+              {Array.isArray(tool.cookie_formats) && tool.cookie_formats.length
+                ? tool.cookie_formats.join(' + ')
+                : tool.inject_strategy || '—'}
+            </CardTitle>
           </CardHeader>
         </Card>
         <Card size="sm">
@@ -277,7 +282,6 @@ export default function ToolDetailPage() {
                       name: String(fd.get('name') || ''),
                       tool_key: String(fd.get('tool_key') || ''),
                       web_url: String(fd.get('web_url') || ''),
-                      inject_strategy: String(fd.get('inject_strategy') || 'cookies'),
                       cookie_jar_mode: String(fd.get('cookie_jar_mode') || 'auto'),
                       status: String(fd.get('status') || 'active'),
                     }),
@@ -330,18 +334,22 @@ export default function ToolDetailPage() {
                       name="cookie_jar_mode"
                       className="h-8 rounded-lg border border-input bg-background px-2.5 text-sm"
                       defaultValue={
-                        tool.cookie_jar_mode === 'browser' ? 'browser' : 'extension_only'
+                        tool.cookie_jar_mode === 'browser' ||
+                        tool.cookie_jar_mode === 'extension_only'
+                          ? tool.cookie_jar_mode
+                          : 'auto'
                       }
-                      key={`jar-${tool.cookie_jar_mode || 'extension_only'}`}
+                      key={`jar-${tool.cookie_jar_mode || 'auto'}`}
                     >
-                      <option value="browser">Yes — browser jar (Grammarly)</option>
-                      <option value="extension_only">No — extension only (Semrush / ChatGPT)</option>
+                      <option value="auto">Auto — detect (Grammarly/Canva → jar, ChatGPT → extension)</option>
+                      <option value="browser">Yes — browser jar</option>
+                      <option value="extension_only">No — extension only (DNR)</option>
                     </select>
                     <p className="text-xs text-muted-foreground">
-                      Vault type (cookies vs IndexedDB) is detected from the paste. This only
-                      controls whether HTTP cookies go into Chrome&apos;s cookie jar.
+                      Vault paste auto-injects whatever formats are present (cookies, localStorage,
+                      sessionStorage, IndexedDB — can be multiple). This only controls where HTTP
+                      cookies live.
                     </p>
-                    <input type="hidden" name="inject_strategy" value={tool.inject_strategy || 'cookies'} />
                   </div>
                   <div className="flex flex-col gap-2">
                     <Label>Status</Label>
