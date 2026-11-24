@@ -21,6 +21,7 @@ import {
   normalizeVaultPlain,
   vaultLooksUsable,
 } from '../lib/vault-normalize.js';
+import { hasCookieJarModeColumn } from '../lib/schema-flags.js';
 
 async function existingKeysForReseller(
   resellerId: number,
@@ -209,9 +210,10 @@ export const toolRoutes: FastifyPluginAsync = async (app) => {
       );
       const total = Number(countRows[0]?.total || 0);
 
+      const jarCol = (await hasCookieJarModeColumn()) ? ', t.cookie_jar_mode' : '';
       const [rows] = await pool.query<ToolListRow[]>(
         `SELECT t.id, t.reseller_id, r.slug AS reseller_slug, t.tool_key, t.name, t.web_url,
-                t.status, t.inject_strategy, t.cookie_jar_mode, t.security_tier, t.pool_id, t.updated_at,
+                t.status, t.inject_strategy${jarCol}, t.security_tier, t.pool_id, t.updated_at,
                 (t.cookie_payload IS NOT NULL AND t.cookie_payload <> '') AS has_cookie
          FROM tools t
          JOIN resellers r ON r.id = t.reseller_id
@@ -221,9 +223,14 @@ export const toolRoutes: FastifyPluginAsync = async (app) => {
         [...params, limit, offset],
       );
 
+      const items = rows.map((r) => ({
+        ...r,
+        cookie_jar_mode: r.cookie_jar_mode || 'auto',
+      }));
+
       const payload = {
         success: true,
-        items: rows,
+        items,
         total,
         limit,
         offset,
@@ -393,24 +400,43 @@ export const toolRoutes: FastifyPluginAsync = async (app) => {
       }
       const formats = JSON.stringify(formatsList);
       const jarMode = body.cookie_jar_mode || 'auto';
+      const hasJar = await hasCookieJarModeColumn();
       const [res] = await pool.query<ResultSetHeader>(
-        `INSERT INTO tools
-          (reseller_id, tool_key, name, web_url, status, inject_strategy, cookie_jar_mode, cookie_formats,
-           cookie_payload, cookie_password, security_tier)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          resellerId,
-          toolKey,
-          body.name,
-          body.web_url,
-          body.status ?? 'active',
-          injectStrategy,
-          jarMode,
-          formats,
-          payload,
-          password,
-          body.security_tier,
-        ],
+        hasJar
+          ? `INSERT INTO tools
+              (reseller_id, tool_key, name, web_url, status, inject_strategy, cookie_jar_mode, cookie_formats,
+               cookie_payload, cookie_password, security_tier)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          : `INSERT INTO tools
+              (reseller_id, tool_key, name, web_url, status, inject_strategy, cookie_formats,
+               cookie_payload, cookie_password, security_tier)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        hasJar
+          ? [
+              resellerId,
+              toolKey,
+              body.name,
+              body.web_url,
+              body.status ?? 'active',
+              injectStrategy,
+              jarMode,
+              formats,
+              payload,
+              password,
+              body.security_tier,
+            ]
+          : [
+              resellerId,
+              toolKey,
+              body.name,
+              body.web_url,
+              body.status ?? 'active',
+              injectStrategy,
+              formats,
+              payload,
+              password,
+              body.security_tier,
+            ],
       );
       await bustToolsListCache();
       return reply.code(201).send({ success: true, item: { id: res.insertId, tool_key: toolKey } });
@@ -442,11 +468,13 @@ export const toolRoutes: FastifyPluginAsync = async (app) => {
         name: body.name,
         web_url: body.web_url,
         inject_strategy: body.inject_strategy,
-        cookie_jar_mode: body.cookie_jar_mode,
         security_tier: body.security_tier,
         status: body.status,
         tool_key: nextToolKey,
       };
+      if (body.cookie_jar_mode !== undefined && (await hasCookieJarModeColumn())) {
+        map.cookie_jar_mode = body.cookie_jar_mode;
+      }
       for (const [k, v] of Object.entries(map)) {
         if (v !== undefined) {
           fields.push(`${k} = ?`);

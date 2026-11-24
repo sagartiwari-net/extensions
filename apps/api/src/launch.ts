@@ -5,6 +5,7 @@ import { pool } from './db.js';
 import { env } from './env.js';
 import { loadLaunchRules } from './launch-rules.js';
 import { parseBrandSettings } from './lib/extension-packager.js';
+import { hasCookieJarModeColumn } from './lib/schema-flags.js';
 import { normalizeVault, vaultLooksUsable } from './lib/vault-normalize.js';
 
 /** Flatten DigitaVision / Cookie-Editor vault shapes for launch. */
@@ -144,11 +145,12 @@ export async function peekLaunchToken(token: string): Promise<{
 }
 
 export async function consumeSessionToken(token: string) {
+  const jarCol = (await hasCookieJarModeColumn()) ? ', t.cookie_jar_mode' : '';
   const [rows] = await pool.query<TokenJoin[]>(
     `SELECT st.id AS token_id, st.reseller_id, st.tool_id, st.expires_at, st.consumed_at, st.payload,
             r.slug AS reseller_slug,
-            t.tool_key, t.name, t.web_url, t.status, t.inject_strategy, t.security_tier,
-            t.cookie_jar_mode, t.cookie_payload, t.cookie_password, t.cookie_formats, t.pool_id,
+            t.tool_key, t.name, t.web_url, t.status, t.inject_strategy${jarCol}, t.security_tier,
+            t.cookie_payload, t.cookie_password, t.cookie_formats, t.pool_id,
             t.proxy_enabled, t.proxy_profile_id, t.user_agent_profile_id, t.custom_user_agent,
             p.cookie_payload AS pool_payload, p.cookie_password AS pool_password,
             px.host AS proxy_host, px.port AS proxy_port, px.scheme AS proxy_scheme,
